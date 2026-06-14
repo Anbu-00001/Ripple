@@ -1,0 +1,18 @@
+# Catalog publishing pipeline for the Ripple AI Catalog layer.
+#
+# This file exists ONLY to sync the declarative agent(s) under `agents/`
+# (and flow(s) under `flows/`) into the GitLab AI Catalog. It is SEPARATE
+# from the Ripple demo project's MR pipeline that builds/runs the Rust engine
+# and Go agent — that compute lives in the `ripple-demo-go` project's own CI.
+#
+# The catalog-sync component runs on a GIT TAG push (see CATALOG.md). It needs
+# a CI/CD variable CATALOG_SYNC_TOKEN (Project Access Token, `api` scope,
+# Maintainer role; a group-level token is required to enable the agent in
+# member projects).
+#
+# Component pinned to @0.0.20 (verified schema/version).
+
+include:
+  - component: $CI_SERVER_HOST/components/ai-catalog/catalog-sync@0.0.20
+    inputs:
+      group_id: 134742282  # VERIFY: top-level group `anbuchelvanganesan.cse2024-group` numeric id

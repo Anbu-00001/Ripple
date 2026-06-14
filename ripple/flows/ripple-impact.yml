@@ -1,0 +1,49 @@
+# Ripple Impact — minimal AI Catalog flow (flow-registry v1).
+#
+# Ambient flow that wraps the same change-impact behavior as a single
+# AgentComponent. It is DECLARATIVE / server-side: it does not run the Ripple
+# Rust engine or Go agent. The agent reads the MR diff, traces callers across
+# the repository, and posts one concise Markdown verdict as an MR note.
+#
+# NOTE: the flow-registry v1 schema is less rigidly pinned in our notes than
+# the declarative-agent schema. This file is a best-effort, well-formed v1
+# example; treat the exact key set as "VERIFY" against
+# gitlab.com/components/ai-catalog before relying on the flow form. The
+# declarative agent in `agents/ripple-impact-reviewer.yml` is the primary,
+# fully-verified deliverable.
+---
+definition:
+  version: v1
+
+environment: ambient
+
+components:
+  - name: ripple_impact_agent
+    type: AgentComponent
+    toolset:
+      - get_merge_request
+      - list_merge_request_diffs
+      - list_all_merge_request_notes
+      - create_merge_request_note
+      - get_repository_file
+      - list_repository_tree
+      - grep
+    prompt: |
+      You estimate the transitive change-impact ("blast radius") of a merge
+      request. Read the MR via get_merge_request and list_merge_request_diffs,
+      identify the changed symbols, then trace their callers across the repo
+      with grep, list_repository_tree, and get_repository_file (reverse
+      reachability: changing B affects everything that calls B). Flag impacted
+      paths that lack test references as "untested impact". Post ONE concise
+      Markdown verdict via create_merge_request_note with:
+      ### Ripple — Change Impact
+      **Risk:**, **Changed symbols:**, **Transitive impact (callers traced):**,
+      **Untested impact:**, **Recommendation:**. Keep it under ~250 words. Do
+      not fabricate call sites or coverage you cannot verify from the repo.
+
+router:
+  - from: ripple_impact_agent
+    to: end
+
+flow:
+  entry_point: ripple_impact_agent
