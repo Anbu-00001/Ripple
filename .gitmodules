@@ -1,4 +1,0 @@
-[submodule "ripple"]
-	path = ripple
-	url = https://gitlab.com/anbuchelvanganesan.cse2024-group/ripple.git
-	branch = main
