@@ -42,8 +42,8 @@ It also renders a **mermaid** diagram of the blast subgraph (changed = blue, unt
 
 | Component | Role | Tests |
 |---|---|---|
-| **Rust engine** (`engine/`) | Pure, deterministic BFS over reverse-`CALLS` edges → the complete transitive caller set with shortest-caller distances. `O(V+E)`, cycle-safe. | 12 |
-| **Go agent** (`agent/`) | Pulls Definitions + 1-hop `CALLS` edges from Orbit (`POST /api/v4/orbit/query`), normalizes, runs the engine, scans the checked-out repo for tests of impacted symbols, renders the Markdown verdict + mermaid, posts it to the MR, and exits non-zero to gate. | 13 |
+| **Rust engine** (`engine/`) | Pure, deterministic BFS over reverse-`CALLS`/`EXTENDS` edges → the complete transitive caller set with shortest-caller distances. `O(V+E)`, cycle-safe. | 14 |
+| **Go agent** (`agent/`) | Pulls Definitions + 1-hop `CALLS`/`EXTENDS` edges from Orbit (`POST /api/v4/orbit/query`), normalizes, runs the engine, scans the checked-out repo for tests of impacted symbols, renders the Markdown verdict + mermaid, posts it to the MR, and exits non-zero to gate. | 14 |
 
 Runs as a GitLab CI job on `merge_request_event`. A companion **declarative GitLab Duo agent** (`agents/faultline-impact-reviewer.yml`) is published to the **AI Catalog** as the always-on, in-platform front door (see `CATALOG.md`).
 
@@ -66,8 +66,8 @@ The job pulls the call graph from Orbit for the MR's changed files, computes the
 ## Run the tests
 
 ```console
-$ (cd engine && cargo test)   # 12 passed (incl. property test) — deterministic engine
-$ (cd agent  && go test ./...) # 13 passed — normalize, render, gate, mermaid
+$ (cd engine && cargo test)   # 14 passed (incl. property test) — deterministic engine
+$ (cd agent  && go test ./...) # 14 passed — normalize, render, gate, mermaid, query contract
 ```
 
 ## Honesty boundaries (by design)

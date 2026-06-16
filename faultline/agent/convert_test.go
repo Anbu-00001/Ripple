@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -319,5 +320,38 @@ func TestNormalizeMergesCallsAndExtends(t *testing.T) {
 	// back-compat: single edge response still works
 	if g2 := normalize(defs, calls); len(g2.Edges) != 1 {
 		t.Fatalf("back-compat normalize(defs, calls): want 1 edge, got %d", len(g2.Edges))
+	}
+}
+
+// TestEdgeQueriesAreValidAndOneHop locks down the contract Faultline relies on:
+// the agent pulls only 1-hop CALLS/EXTENDS edges from Orbit and the Rust engine
+// computes the transitive closure. If someone "optimizes" by raising max_hops to
+// reach deeper, they would hit Orbit's hard cap of 3 (compile_error) — so the
+// 1-hop invariant is load-bearing, not incidental. Each builder must also embed
+// the project_id filter and emit valid JSON.
+func TestEdgeQueriesAreValidAndOneHop(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		typ  string
+	}{
+		{"callsQuery", callsQuery(42), "CALLS"},
+		{"extendsQuery", extendsQuery(42), "EXTENDS"},
+	}
+	for _, c := range cases {
+		var v any
+		if err := json.Unmarshal([]byte(c.body), &v); err != nil {
+			t.Fatalf("%s: not valid JSON: %v", c.name, err)
+		}
+		if !strings.Contains(c.body, `"type":"`+c.typ+`"`) {
+			t.Errorf("%s: missing relationship type %q", c.name, c.typ)
+		}
+		if !strings.Contains(c.body, `"value":42`) {
+			t.Errorf("%s: missing project_id filter (value:42)", c.name)
+		}
+		// load-bearing: 1-hop only, never approaching Orbit's max_hops cap of 3.
+		if !strings.Contains(c.body, `"max_hops":1`) {
+			t.Errorf("%s: expected max_hops:1 (engine does the closure), got %s", c.name, c.body)
+		}
 	}
 }
