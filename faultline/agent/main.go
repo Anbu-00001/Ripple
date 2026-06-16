@@ -93,9 +93,10 @@ type report struct {
 	BlastRadius   []impacted `json:"blast_radius"`
 }
 
-// normalize merges the definition + CALLS query results into one deduped graph.
-// Pure function (no I/O) so it can be unit-tested.
-func normalize(defs, calls orbitResp) graph {
+// normalize merges the definitions + one or more edge query results (CALLS,
+// EXTENDS) into one deduped graph. Variadic over edge responses so callers can
+// pass just CALLS (back-compat) or CALLS+EXTENDS. Pure function (unit-tested).
+func normalize(defs orbitResp, edgeResps ...orbitResp) graph {
 	nm := map[string]gNode{}
 	addNodes := func(ns []orbitNode) {
 		for _, n := range ns {
@@ -110,17 +111,22 @@ func normalize(defs, calls orbitResp) graph {
 		}
 	}
 	addNodes(defs.Result.Nodes)
-	addNodes(calls.Result.Nodes)
+	for _, r := range edgeResps {
+		addNodes(r.Result.Nodes)
+	}
 
 	var g graph
 	for _, n := range nm {
 		g.Nodes = append(g.Nodes, n)
 	}
-	for _, e := range calls.Result.Edges {
-		// Only real CALLS edges with both endpoints; empty from/to (seen in
-		// partial Orbit responses) would otherwise pollute the graph with ""->"".
-		if e.Type == "CALLS" && e.FromID != "" && e.ToID != "" {
-			g.Edges = append(g.Edges, gEdge{Type: "CALLS", From: e.FromID, To: e.ToID})
+	for _, r := range edgeResps {
+		for _, e := range r.Result.Edges {
+			// Keep impact edges (CALLS, EXTENDS) with both endpoints. Empty
+			// from/to (partial Orbit responses) and other types (IMPORTS, etc.)
+			// would pollute the closure, so they are dropped.
+			if (e.Type == "CALLS" || e.Type == "EXTENDS") && e.FromID != "" && e.ToID != "" {
+				g.Edges = append(g.Edges, gEdge{Type: e.Type, From: e.FromID, To: e.ToID})
+			}
 		}
 	}
 	return g
@@ -425,7 +431,7 @@ func renderMarkdown(r report, changedNames []string, untested []impacted) string
 			b.WriteString(fmt.Sprintf("- %s (%s)\n", mdCode(name), mdCell(file)))
 		}
 	}
-	b.WriteString("\n<sub>Transitive reverse-`CALLS` closure computed by the Faultline engine over GitLab Orbit's knowledge graph.</sub>\n")
+	b.WriteString("\n<sub>Transitive reverse-`CALLS`/`EXTENDS` closure computed by the Faultline engine over GitLab Orbit's knowledge graph.</sub>\n")
 	return b.String()
 }
 
@@ -518,6 +524,13 @@ func callsQuery(pid int) string {
 	return fmt.Sprintf(`{"query":{"query_type":"traversal","nodes":[{"id":"a","entity":"Definition","columns":["name","file_path","definition_type"],"filters":{"project_id":{"op":"eq","value":%d}}},{"id":"b","entity":"Definition","columns":["name","file_path","definition_type"]}],"relationships":[{"type":"CALLS","from":"a","to":"b","min_hops":1,"max_hops":1,"direction":"outgoing"}],"limit":1000},"response_format":"raw"}`, pid)
 }
 
+// extendsQuery fetches one-hop EXTENDS edges (subtype -> supertype: inheritance,
+// interface implementation, struct embedding). The engine folds these into the
+// same transitive closure as CALLS, so a base-type change ripples to subtypes.
+func extendsQuery(pid int) string {
+	return fmt.Sprintf(`{"query":{"query_type":"traversal","nodes":[{"id":"a","entity":"Definition","columns":["name","file_path","definition_type"],"filters":{"project_id":{"op":"eq","value":%d}}},{"id":"b","entity":"Definition","columns":["name","file_path","definition_type"]}],"relationships":[{"type":"EXTENDS","from":"a","to":"b","min_hops":1,"max_hops":1,"direction":"outgoing"}],"limit":1000},"response_format":"raw"}`, pid)
+}
+
 func splitNonEmpty(s string) []string {
 	var out []string
 	for _, p := range strings.Split(s, ",") {
@@ -573,8 +586,15 @@ func main() {
 	fatal(err)
 	calls, err := query(callsQuery(*pid))
 	fatal(err)
+	// EXTENDS is best-effort: older Orbit versions may not expose it, and a
+	// project with no inheritance simply returns no edges — neither should abort.
+	extends, err := query(extendsQuery(*pid))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "faultline-agent: EXTENDS query failed, continuing with CALLS only: %v\n", err)
+		extends = orbitResp{}
+	}
 
-	g := normalize(defs, calls)
+	g := normalize(defs, calls, extends)
 	changed := resolveChanged(g, splitNonEmpty(*changedDefs), splitNonEmpty(*changedFiles))
 	if len(changed) == 0 {
 		fatal(fmt.Errorf("no changed definitions resolved (project may be unindexed, or files have no definitions)"))

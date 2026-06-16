@@ -288,3 +288,36 @@ func TestRenderMarkdownShallowDoesNotClaimCap(t *testing.T) {
 		t.Fatalf("depth<=3 must NOT claim to beat the 3-hop cap, got:\n%s", md)
 	}
 }
+
+func TestNormalizeMergesCallsAndExtends(t *testing.T) {
+	var defs, calls, extends orbitResp
+	defs.Result.Nodes = []orbitNode{{ID: "B", Name: "Base"}, {ID: "T", Name: "Sub"}, {ID: "X", Name: "Caller"}}
+	calls.Result.Edges = []orbitEdge{
+		{FromID: "X", ToID: "B", Type: "CALLS"},   // keep
+		{FromID: "X", ToID: "B", Type: "IMPORTS"}, // drop: not an impact edge
+	}
+	extends.Result.Edges = []orbitEdge{
+		{FromID: "T", ToID: "B", Type: "EXTENDS"}, // keep: subtype edge
+		{FromID: "", ToID: "B", Type: "EXTENDS"},  // drop: empty endpoint
+	}
+	g := normalize(defs, calls, extends)
+	if len(g.Edges) != 2 {
+		t.Fatalf("want 2 impact edges (1 CALLS + 1 EXTENDS), got %d (%v)", len(g.Edges), g.Edges)
+	}
+	var hasCalls, hasExtends bool
+	for _, e := range g.Edges {
+		if e.Type == "CALLS" && e.From == "X" && e.To == "B" {
+			hasCalls = true
+		}
+		if e.Type == "EXTENDS" && e.From == "T" && e.To == "B" {
+			hasExtends = true
+		}
+	}
+	if !hasCalls || !hasExtends {
+		t.Fatalf("expected both a CALLS and an EXTENDS edge, got %+v", g.Edges)
+	}
+	// back-compat: single edge response still works
+	if g2 := normalize(defs, calls); len(g2.Edges) != 1 {
+		t.Fatalf("back-compat normalize(defs, calls): want 1 edge, got %d", len(g2.Edges))
+	}
+}

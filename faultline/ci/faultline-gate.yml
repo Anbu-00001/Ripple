@@ -1,0 +1,34 @@
+# Faultline change-impact GATE — reusable CI include.
+#
+# In your project: set a CI/CD variable FAULTLINE_TOKEN (access token, `api`
+# scope, masked), then add to .gitlab-ci.yml:
+#   include:
+#     - remote: 'https://gitlab.com/anbuchelvanganesan.cse2024-group/faultline/-/raw/main/ci/faultline-gate.yml'
+#
+# On every merge request it pulls the call graph from GitLab Orbit, computes the
+# FULL transitive reverse-CALLS closure of the changed symbols (Orbit's DSL caps
+# traversals at max_hops=3; Faultline is unbounded), flags untested impacted
+# symbols, posts a Markdown verdict to the MR, and FAILS the pipeline (blocks the
+# merge) when untested-impacted symbols exceed the threshold.
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+faultline-gate:
+  image: rust:latest
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  before_script:
+    - |
+      apt-get update -qq && apt-get install -y -qq golang-go jq curl git >/dev/null
+      git clone --depth 1 "https://gitlab.com/anbuchelvanganesan.cse2024-group/faultline.git" /tmp/faultline
+      ( cd /tmp/faultline/engine && cargo build --release -q )
+      ( cd /tmp/faultline/agent && go build -o /usr/local/bin/faultline-agent . )
+  script:
+    - |
+      export GITLAB_TOKEN="$FAULTLINE_TOKEN"
+      CHANGED=$(curl -s -H "Authorization: Bearer $FAULTLINE_TOKEN" "$CI_API_V4_URL/projects/$CI_PROJECT_ID/merge_requests/$CI_MERGE_REQUEST_IID/changes" | jq -r '.changes[].new_path' | paste -sd, -)
+      echo "Faultline: changed files = $CHANGED"
+      faultline-agent --mode rest --project-id "$CI_PROJECT_ID" --changed-files "$CHANGED" \
+        --engine /tmp/faultline/engine/target/release/faultline-engine \
+        --repo-root "$CI_PROJECT_DIR" --post-mr "$CI_MERGE_REQUEST_IID" --gate-untested 0
