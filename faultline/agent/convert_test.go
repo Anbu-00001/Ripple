@@ -34,8 +34,8 @@ func TestNormalizeDedupAndEdgeMapping(t *testing.T) {
 		t.Fatalf("edge maps from_id/to_id wrong: %+v", g.Edges[0])
 	}
 	for _, n := range g.Nodes {
-		if n.ID == "D" && n.DefinitionType != "Function" {
-			t.Fatalf("missing definition_type should default to Function, got %q", n.DefinitionType)
+		if n.ID == "D" && n.DefinitionType != "Definition" {
+			t.Fatalf("missing definition_type should default to Definition (not Function), got %q", n.DefinitionType)
 		}
 	}
 }
@@ -155,7 +155,13 @@ func TestUntestedImpact(t *testing.T) {
 }
 
 func TestIsTestFile(t *testing.T) {
-	yes := []string{"calc/tax_test.go", "x/test_foo.py", "a/foo.test.ts", "b/Foo.spec.js", "m/BarTest.java", "pkg/__tests__/x.js"}
+	yes := []string{
+		"calc/tax_test.go", "x/test_foo.py", "a/foo.test.ts", "b/Foo.spec.js",
+		"m/BarTest.java", "pkg/__tests__/x.js",
+		// broadened coverage (audit M2)
+		"svc/user_spec.rb", "lib/calc_test.exs", "app/UserTest.php",
+		"core/Foo.spec.mjs", "ios/LoginTests.swift", "py/api_tests.py",
+	}
 	no := []string{"calc/tax.go", "main.go", "README.md", "src/foo.ts"}
 	for _, f := range yes {
 		if !isTestFile(f) {
@@ -165,6 +171,34 @@ func TestIsTestFile(t *testing.T) {
 	for _, f := range no {
 		if isTestFile(f) {
 			t.Fatalf("%q should NOT be a test file", f)
+		}
+	}
+	// configurable: a project-specific convention via FAULTLINE_TEST_PATTERNS.
+	if isTestFile("qa/check.bats") {
+		t.Fatalf(".bats is not built-in; must not match without an extra pattern")
+	}
+	if !isTestFile("qa/check.bats", ".bats") {
+		t.Fatalf("extra pattern .bats should mark the file as a test")
+	}
+}
+
+func TestQueryLimitRespectsEnvAndBuildersHonorIt(t *testing.T) {
+	t.Setenv("FAULTLINE_QUERY_LIMIT", "5000")
+	if queryLimit() != 5000 {
+		t.Fatalf("env override ignored, got %d", queryLimit())
+	}
+	t.Setenv("FAULTLINE_QUERY_LIMIT", "")
+	if queryLimit() != defaultQueryLimit {
+		t.Fatalf("empty env should use default %d, got %d", defaultQueryLimit, queryLimit())
+	}
+	t.Setenv("FAULTLINE_QUERY_LIMIT", "-3")
+	if queryLimit() != defaultQueryLimit {
+		t.Fatalf("invalid env must fall back to default, got %d", queryLimit())
+	}
+	// no hardcoded 1000: the limit arg must appear in every built query.
+	for _, body := range []string{defsQuery(7, 5000), callsQuery(7, 5000), extendsQuery(7, 5000)} {
+		if !strings.Contains(body, `"limit":5000`) {
+			t.Fatalf("query did not honor the limit arg: %s", body)
 		}
 	}
 }
@@ -230,9 +264,9 @@ func TestNormalizeSkipsEmptyAndNonCallsEdges(t *testing.T) {
 	var defs, calls orbitResp
 	defs.Result.Nodes = []orbitNode{{ID: "A", Name: "a"}, {ID: "B", Name: "b"}}
 	calls.Result.Edges = []orbitEdge{
-		{FromID: "A", ToID: "B", Type: "CALLS"}, // keep
-		{FromID: "", ToID: "B", Type: "CALLS"},  // drop: empty from (partial Orbit response)
-		{FromID: "A", ToID: "", Type: "CALLS"},  // drop: empty to
+		{FromID: "A", ToID: "B", Type: "CALLS"},   // keep
+		{FromID: "", ToID: "B", Type: "CALLS"},    // drop: empty from (partial Orbit response)
+		{FromID: "A", ToID: "", Type: "CALLS"},    // drop: empty to
 		{FromID: "A", ToID: "B", Type: "IMPORTS"}, // drop: not CALLS
 	}
 	g := normalize(defs, calls)
@@ -335,8 +369,8 @@ func TestEdgeQueriesAreValidAndOneHop(t *testing.T) {
 		body string
 		typ  string
 	}{
-		{"callsQuery", callsQuery(42), "CALLS"},
-		{"extendsQuery", extendsQuery(42), "EXTENDS"},
+		{"callsQuery", callsQuery(42, defaultQueryLimit), "CALLS"},
+		{"extendsQuery", extendsQuery(42, defaultQueryLimit), "EXTENDS"},
 	}
 	for _, c := range cases {
 		var v any

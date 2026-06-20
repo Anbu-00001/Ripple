@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -118,6 +119,32 @@ type report struct {
 // One named home so the boundary can't drift across call sites (audit M3).
 const orbitMaxHops = 3
 
+// defaultQueryLimit caps rows per Orbit query. This DSL has no documented cursor
+// pagination, so on a very large repo a single query can be truncated; the limit is
+// overridable via FAULTLINE_QUERY_LIMIT, and truncation is WARNED, never silent
+// (audit L1). Larger values capture bigger graphs at more memory/time.
+const defaultQueryLimit = 1000
+
+func queryLimit() int {
+	if s := os.Getenv("FAULTLINE_QUERY_LIMIT"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			return n
+		}
+	}
+	return defaultQueryLimit
+}
+
+// httpTimeout bounds every GitLab/Orbit call so a hung endpoint can't hang the agent;
+// overridable via FAULTLINE_HTTP_TIMEOUT_SEC for slow networks (audit L3).
+func httpTimeout() time.Duration {
+	if s := os.Getenv("FAULTLINE_HTTP_TIMEOUT_SEC"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 30 * time.Second
+}
+
 // normalize merges the definitions + one or more edge query results (CALLS,
 // EXTENDS) into one deduped graph. Variadic over edge responses so callers can
 // pass just CALLS (back-compat) or CALLS+EXTENDS. Pure function (unit-tested).
@@ -130,7 +157,9 @@ func normalize(defs orbitResp, edgeResps ...orbitResp) graph {
 			}
 			dt := n.DefinitionType
 			if dt == "" {
-				dt = "Function"
+				// An Orbit node with no subtype is a Definition of unknown kind; do not
+				// assume Function (it could be a class/module/constant) — audit M1.
+				dt = "Definition"
 			}
 			nm[n.ID] = gNode{ID: n.ID, Name: n.Name, FilePath: n.FilePath, DefinitionType: dt}
 		}
@@ -201,15 +230,29 @@ func mdCode(s string) string {
 	return "`" + mdCell(strings.ReplaceAll(s, "`", "'")) + "`"
 }
 
-// isTestFile heuristically identifies test files across common languages. Orbit
-// does not index test code, so Faultline scans the checked-out repo itself to find
-// which transitively-impacted symbols no test references ("untested blast radius").
-func isTestFile(name string) bool {
+// isTestFile heuristically identifies test files across common languages. Orbit does
+// not index test code, so Faultline scans the checked-out repo itself to find which
+// transitively-impacted symbols no test references ("untested blast radius"). The
+// built-in suffix/path list is broad but never exhaustive, so extraPatterns (from
+// FAULTLINE_TEST_PATTERNS) augment it with project-specific conventions — making the
+// heuristic configurable rather than a fixed assumption (audit M2).
+func isTestFile(name string, extraPatterns ...string) bool {
 	base := filepath.Base(name)
 	suffixes := []string{
-		"_test.go", "_test.py", ".test.ts", ".test.tsx", ".test.js", ".test.jsx",
-		".spec.ts", ".spec.js", "_spec.rb", "_test.rb", "Test.java", "Tests.java",
-		"Test.kt", "Tests.cs", "_test.rs", "_test.cpp", "_test.cc",
+		"_test.go",
+		"_test.py", "_tests.py", // pytest / unittest
+		".test.ts", ".test.tsx", ".test.js", ".test.jsx", ".test.mjs", ".test.cjs",
+		".spec.ts", ".spec.tsx", ".spec.js", ".spec.jsx", ".spec.mjs", ".spec.cjs",
+		"_spec.rb", "_test.rb", // RSpec / minitest
+		"Test.java", "Tests.java", "IT.java", // JUnit / integration
+		"Test.kt", "Tests.kt",
+		"Test.cs", "Tests.cs",
+		"_test.rs",
+		"_test.cpp", "_test.cc", "_test.cxx",
+		"Test.php", "Test.scala", "Spec.scala",
+		"_test.exs",                 // Elixir
+		"Test.swift", "Tests.swift", // XCTest
+		"_test.dart",
 	}
 	for _, s := range suffixes {
 		if strings.HasSuffix(base, s) {
@@ -219,12 +262,18 @@ func isTestFile(name string) bool {
 	if strings.HasPrefix(base, "test_") {
 		return true
 	}
+	for _, p := range extraPatterns {
+		if p != "" && (strings.HasSuffix(base, p) || strings.Contains(name, p)) {
+			return true
+		}
+	}
 	return strings.Contains(name, "/test/") || strings.Contains(name, "/tests/") ||
 		strings.Contains(name, "/spec/") || strings.Contains(name, "/__tests__/")
 }
 
 // readTestCorpus concatenates the contents of every test file under root.
 func readTestCorpus(root string) string {
+	extra := splitNonEmpty(os.Getenv("FAULTLINE_TEST_PATTERNS"))
 	var b strings.Builder
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -237,7 +286,7 @@ func readTestCorpus(root string) string {
 			}
 			return nil
 		}
-		if isTestFile(path) {
+		if isTestFile(path, extra...) {
 			if data, e := os.ReadFile(path); e == nil {
 				b.Write(data)
 				b.WriteByte('\n')
@@ -564,7 +613,7 @@ func queryGlab(body string) (orbitResp, error) {
 }
 
 // httpClient bounds every GitLab/Orbit call so a hung endpoint can't hang the agent.
-var httpClient = &http.Client{Timeout: 30 * time.Second}
+var httpClient = &http.Client{Timeout: httpTimeout()}
 
 func queryREST(body, host, token string) (orbitResp, error) {
 	var out orbitResp
@@ -593,19 +642,19 @@ func truncate(s string, n int) string {
 	return s
 }
 
-func defsQuery(pid int) string {
-	return fmt.Sprintf(`{"query":{"query_type":"traversal","node":{"id":"d","entity":"Definition","columns":["name","file_path","definition_type"],"filters":{"project_id":{"op":"eq","value":%d}}},"limit":1000},"response_format":"raw"}`, pid)
+func defsQuery(pid, limit int) string {
+	return fmt.Sprintf(`{"query":{"query_type":"traversal","node":{"id":"d","entity":"Definition","columns":["name","file_path","definition_type"],"filters":{"project_id":{"op":"eq","value":%d}}},"limit":%d},"response_format":"raw"}`, pid, limit)
 }
 
-func callsQuery(pid int) string {
-	return fmt.Sprintf(`{"query":{"query_type":"traversal","nodes":[{"id":"a","entity":"Definition","columns":["name","file_path","definition_type"],"filters":{"project_id":{"op":"eq","value":%d}}},{"id":"b","entity":"Definition","columns":["name","file_path","definition_type"]}],"relationships":[{"type":"CALLS","from":"a","to":"b","min_hops":1,"max_hops":1,"direction":"outgoing"}],"limit":1000},"response_format":"raw"}`, pid)
+func callsQuery(pid, limit int) string {
+	return fmt.Sprintf(`{"query":{"query_type":"traversal","nodes":[{"id":"a","entity":"Definition","columns":["name","file_path","definition_type"],"filters":{"project_id":{"op":"eq","value":%d}}},{"id":"b","entity":"Definition","columns":["name","file_path","definition_type"]}],"relationships":[{"type":"CALLS","from":"a","to":"b","min_hops":1,"max_hops":1,"direction":"outgoing"}],"limit":%d},"response_format":"raw"}`, pid, limit)
 }
 
 // extendsQuery fetches one-hop EXTENDS edges (subtype -> supertype: inheritance,
 // interface implementation, struct embedding). The engine folds these into the
 // same transitive closure as CALLS, so a base-type change ripples to subtypes.
-func extendsQuery(pid int) string {
-	return fmt.Sprintf(`{"query":{"query_type":"traversal","nodes":[{"id":"a","entity":"Definition","columns":["name","file_path","definition_type"],"filters":{"project_id":{"op":"eq","value":%d}}},{"id":"b","entity":"Definition","columns":["name","file_path","definition_type"]}],"relationships":[{"type":"EXTENDS","from":"a","to":"b","min_hops":1,"max_hops":1,"direction":"outgoing"}],"limit":1000},"response_format":"raw"}`, pid)
+func extendsQuery(pid, limit int) string {
+	return fmt.Sprintf(`{"query":{"query_type":"traversal","nodes":[{"id":"a","entity":"Definition","columns":["name","file_path","definition_type"],"filters":{"project_id":{"op":"eq","value":%d}}},{"id":"b","entity":"Definition","columns":["name","file_path","definition_type"]}],"relationships":[{"type":"EXTENDS","from":"a","to":"b","min_hops":1,"max_hops":1,"direction":"outgoing"}],"limit":%d},"response_format":"raw"}`, pid, limit)
 }
 
 func splitNonEmpty(s string) []string {
@@ -659,16 +708,24 @@ func main() {
 		fatal(fmt.Errorf("unknown --mode %q (want glab or rest)", *mode))
 	}
 
-	defs, err := query(defsQuery(*pid))
+	limit := queryLimit()
+	defs, err := query(defsQuery(*pid, limit))
 	fatal(err)
-	calls, err := query(callsQuery(*pid))
+	calls, err := query(callsQuery(*pid, limit))
 	fatal(err)
 	// EXTENDS is best-effort: older Orbit versions may not expose it, and a
 	// project with no inheritance simply returns no edges — neither should abort.
-	extends, err := query(extendsQuery(*pid))
+	extends, err := query(extendsQuery(*pid, limit))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "faultline-agent: EXTENDS query failed, continuing with CALLS only: %v\n", err)
 		extends = orbitResp{}
+	}
+	// Truncation guard (audit L1): a query that hits the row cap is likely partial, which
+	// would silently shrink the closure. Warn loudly and flag the verdict — never silent.
+	truncated := len(defs.Result.Nodes) >= limit ||
+		len(calls.Result.Edges) >= limit || len(extends.Result.Edges) >= limit
+	if truncated {
+		fmt.Fprintf(os.Stderr, "faultline-agent: WARNING a query hit the %d-row limit; the graph may be truncated and the closure partial. Raise FAULTLINE_QUERY_LIMIT.\n", limit)
 	}
 
 	g := normalize(defs, calls, extends)
@@ -737,6 +794,9 @@ func main() {
 	if mer := buildMermaid(g, changed, rep, untested); mer != "" {
 		// Insert the blast-radius diagram just above the attribution footer.
 		md = strings.Replace(md, "\n<sub>Transitive", "\n"+mer+"\n<sub>Transitive", 1)
+	}
+	if truncated {
+		md += fmt.Sprintf("\n> ⚠️ **Note:** an Orbit query hit the %d-row limit, so the analyzed graph may be partial. Set `FAULTLINE_QUERY_LIMIT` higher for complete results.\n", limit)
 	}
 
 	switch {

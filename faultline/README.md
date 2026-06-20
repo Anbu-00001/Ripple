@@ -4,7 +4,7 @@
 
 > Orbit can *describe* a change's blast radius. **Faultline makes Orbit *enforce* it** — Code Owners for the blast radius, not the diff.
 
-**47 deterministic tests** · Rust engine: 27 example + **3 property tests proving the closure is complete, the minimum test set is provably minimal, and the Shapley risk split is exact** · Go agent: 17 · runs as a GitLab CI gate · [why it's correct →](CORRECTNESS.md)
+**48 deterministic tests** · Rust engine: 27 example + **3 property tests proving the closure is complete, the minimum test set is provably minimal, and the Shapley risk split is exact** · Go agent: 18 · runs as a GitLab CI gate · [why it's correct →](CORRECTNESS.md)
 
 Faultline computes the **full transitive set of callers** ("blast radius") of the symbols changed in a merge request, intersects it with the impacted code that **lacks test coverage**, and **fails the pipeline (blocks the merge)** when an untested blast radius is found. A green-looking one-line helper change that silently reaches deep, untested code becomes a *blocked* MR with an explained verdict.
 
@@ -50,7 +50,7 @@ Both are deterministic pure functions of the graph — no model in the compute p
 | Component | Role | Tests |
 |---|---|---|
 | **Rust engine** (`engine/`) | Pure, deterministic BFS over reverse-`CALLS`/`EXTENDS` edges → the complete transitive caller set with shortest-caller distances (`O(V+E)`, cycle-safe), **plus the provably-minimal minimum test set (min vertex cut) and exact Shapley untested-risk attribution**. | 30 |
-| **Go agent** (`agent/`) | Pulls Definitions + 1-hop `CALLS`/`EXTENDS` edges from Orbit (`POST /api/v4/orbit/query`), normalizes, runs the engine, scans the checked-out repo for tests of impacted symbols, renders the Markdown verdict (blast radius, minimum test set, Shapley attribution) + mermaid, posts it to the MR, and exits non-zero to gate. | 17 |
+| **Go agent** (`agent/`) | Pulls Definitions + 1-hop `CALLS`/`EXTENDS` edges from Orbit (`POST /api/v4/orbit/query`), normalizes, runs the engine, scans the checked-out repo for tests of impacted symbols, renders the Markdown verdict (blast radius, minimum test set, Shapley attribution) + mermaid, posts it to the MR, and exits non-zero to gate. | 18 |
 
 Runs as a GitLab CI job on `merge_request_event`. A companion **declarative GitLab Duo agent** (`agents/faultline-impact-reviewer.yml`) is published to the **AI Catalog** as the always-on, in-platform front door (see `CATALOG.md`).
 
@@ -70,11 +70,20 @@ include:
 
 The job pulls the call graph from Orbit for the MR's changed files, computes the blast radius, and posts the verdict. **Gating is opt-in**: by default the job is comment-only (it never blocks a merge on first adoption). Set a `FAULTLINE_GATE` CI/CD variable to a number `N` to fail the pipeline when more than `N` untested-impacted symbols are found (`FAULTLINE_GATE=0` is zero-tolerance).
 
+### Configuration (all optional — nothing repo-specific is baked in)
+
+| Variable | Default | Effect |
+|---|---|---|
+| `FAULTLINE_GATE` | unset → comment-only | Fail the pipeline above `N` untested-impacted symbols. |
+| `FAULTLINE_QUERY_LIMIT` | `1000` | Rows per Orbit query; if a query hits the cap the verdict warns it may be partial (never silent). |
+| `FAULTLINE_TEST_PATTERNS` | unset | Comma-separated extra test-file suffixes/path fragments (e.g. `.bats,/it/`) for non-standard conventions. |
+| `FAULTLINE_HTTP_TIMEOUT_SEC` | `30` | Per-request timeout for Orbit/GitLab calls. |
+
 ## Run the tests
 
 ```console
 $ (cd engine && cargo test)   # 30 passed (incl. 3 property tests) — closure, min-cut, Shapley
-$ (cd agent  && go test ./...) # 17 passed — normalize, render, gate, mermaid, query contract
+$ (cd agent  && go test ./...) # 18 passed — normalize, render, gate, mermaid, query contract, config
 ```
 
 ## Honesty boundaries (by design)
