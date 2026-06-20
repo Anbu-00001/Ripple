@@ -101,16 +101,24 @@ type riskShare struct {
 	SharePct float64 `json:"share_pct"`
 }
 
+type coverageRank struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	FilePath string `json:"file_path"`
+	Covers   int    `json:"covers"`
+}
+
 type report struct {
-	Changed               []string    `json:"changed"`
-	ImpactedCount         int         `json:"impacted_count"`
-	MaxDepth              int         `json:"max_depth"`
-	BlastRadius           []impacted  `json:"blast_radius"`
-	UntestedCount         int         `json:"untested_count"`
-	MinimumTestSet        []cutNode   `json:"minimum_test_set"`
-	DisjointUntestedPaths int         `json:"disjoint_untested_paths"`
-	RiskAttribution       []riskShare `json:"risk_attribution"`
-	RiskAttributionExact  bool        `json:"risk_attribution_exact"`
+	Changed               []string       `json:"changed"`
+	ImpactedCount         int            `json:"impacted_count"`
+	MaxDepth              int            `json:"max_depth"`
+	BlastRadius           []impacted     `json:"blast_radius"`
+	UntestedCount         int            `json:"untested_count"`
+	MinimumTestSet        []cutNode      `json:"minimum_test_set"`
+	DisjointUntestedPaths int            `json:"disjoint_untested_paths"`
+	RiskAttribution       []riskShare    `json:"risk_attribution"`
+	RiskAttributionExact  bool           `json:"risk_attribution_exact"`
+	CoverageRanking       []coverageRank `json:"coverage_ranking"`
 }
 
 // orbitMaxHops is GitLab Orbit's hard query-DSL cap (max_hops ≤ 3). It is the moat:
@@ -384,6 +392,29 @@ func buildMermaid(g graph, changed []string, r report, untested []impacted) stri
 	for _, it := range untested {
 		untestedSet[it.ID] = true
 	}
+	// De-hairball: on a large blast radius, draw only the nodes that matter — the
+	// change, the untested code, and the recommended tests — so the diagram stays
+	// readable; the interactive graph artifact still has the full picture.
+	const mermaidNodeCap = 24
+	truncated := false
+	hiddenCount := 0
+	if len(inSet) > mermaidNodeCap {
+		essential := map[string]bool{}
+		for id := range changedSet {
+			essential[id] = true
+		}
+		for id := range untestedSet {
+			essential[id] = true
+		}
+		for _, c := range r.MinimumTestSet {
+			essential[c.ID] = true
+		}
+		if len(essential) > 0 && len(essential) < len(inSet) {
+			hiddenCount = len(inSet) - len(essential)
+			inSet = essential
+			truncated = true
+		}
+	}
 	label := map[string]string{}
 	for _, n := range g.Nodes {
 		label[n.ID] = n.Name
@@ -435,6 +466,9 @@ func buildMermaid(g graph, changed []string, r report, untested []impacted) stri
 		}
 	}
 	b.WriteString("```\n")
+	if truncated {
+		b.WriteString(fmt.Sprintf("\n_Showing the change, the untested code, and the recommended tests; %d more impacted node(s) hidden — open the interactive graph for the full picture._\n", hiddenCount))
+	}
 	return b.String()
 }
 
@@ -483,92 +517,163 @@ func recipeComparison(r report) string {
 // renderMarkdown turns an engine report into a Markdown MR verdict. Pure (no I/O)
 // so it can be unit-tested. Unnamed/unresolved nodes (Orbit sometimes returns a
 // Definition without name/file metadata) are labeled rather than rendered blank.
+// renderMarkdown builds the MR verdict: a plain-language summary first (what's
+// happening, the fastest fix, what could break), with the rigorous detail (full
+// impact, the provably-minimal test set, per-node coverage, risk shares) tucked
+// into a collapsible section so an everyday developer can act in seconds while a
+// reviewer who wants the math can expand it.
 func renderMarkdown(r report, changedNames []string, untested []impacted) string {
 	var b strings.Builder
-	b.WriteString("## 🪨 Faultline — change-impact analysis\n\n")
-	if len(changedNames) > 0 {
-		b.WriteString("**Changed:** ")
-		for i, n := range changedNames {
-			if i > 0 {
-				b.WriteString(", ")
-			}
-			b.WriteString(mdCode(n))
-		}
-		b.WriteString("\n\n")
-	}
+	b.WriteString("## 🪨 Faultline\n\n")
+
 	if r.ImpactedCount == 0 {
-		b.WriteString("✅ **Empty blast radius.** No definition transitively calls the changed code in the indexed graph.\n")
+		who := "the changed code"
+		if len(changedNames) > 0 {
+			who = joinCode(changedNames)
+		}
+		b.WriteString("✅ **Safe to merge.** Nothing else in the codebase calls " + who + ", so this change can't ripple outward (based on the indexed graph).\n")
+		b.WriteString(faultlineFooter())
 		return b.String()
 	}
-	b.WriteString(fmt.Sprintf("⚠️ **%d definition(s) transitively affected** — max depth **%d**", r.ImpactedCount, r.MaxDepth))
-	if r.MaxDepth > orbitMaxHops {
-		b.WriteString(fmt.Sprintf(", beyond Orbit's %d-hop query cap", orbitMaxHops))
+
+	reach := fmt.Sprintf("This change could affect **%d** other function(s)", r.ImpactedCount)
+	if len(changedNames) > 0 {
+		reach = fmt.Sprintf("Changing %s could affect **%d** other function(s)", joinCode(changedNames), r.ImpactedCount)
 	}
-	b.WriteString(".\n\n| Impacted definition | File | Caller distance |\n|---|---|---|\n")
+	// Depth note (independent of test coverage): impact deeper than Orbit's query cap.
+	depthNote := fmt.Sprintf("up to **%d** call(s) deep", r.MaxDepth)
+	if r.MaxDepth > orbitMaxHops {
+		depthNote = fmt.Sprintf("up to **%d** call(s) deep, past Orbit's %d-hop query limit", r.MaxDepth, orbitMaxHops)
+	}
+
+	if len(untested) == 0 {
+		b.WriteString("✅ **Looks safe.** " + reach + " (" + depthNote + "), and every one of them is already covered by a test.\n")
+		b.WriteString(detailsBlock(r, untested))
+		b.WriteString(faultlineFooter())
+		return b.String()
+	}
+
+	// Untested blast radius — the headline case.
+	b.WriteString("### ⚠️ This change reaches untested code\n\n")
+	b.WriteString("**What's happening:** " + reach + fmt.Sprintf(" — up to **%d** call(s) away", r.MaxDepth))
+	if r.MaxDepth > orbitMaxHops {
+		b.WriteString(fmt.Sprintf(" (deeper than the diff shows, and past Orbit's %d-hop query limit)", orbitMaxHops))
+	}
+	b.WriteString(fmt.Sprintf(". **%d** of them have **no tests**.\n\n", len(untested)))
+
+	if len(r.MinimumTestSet) > 0 {
+		b.WriteString(fmt.Sprintf("**Fastest fix:** add **%d** test(s) — at %s — to cover the whole change.\n",
+			len(r.MinimumTestSet), joinCutNodes(r.MinimumTestSet)))
+		if len(r.MinimumTestSet) > 1 && len(r.CoverageRanking) > 0 && r.CoverageRanking[0].Covers > 1 {
+			top := r.CoverageRanking[0]
+			b.WriteString(fmt.Sprintf("\n💡 **Short on time?** A single test at %s covers **%d of %d** untested function(s) by itself.\n",
+				mdCode(named(top.Name, top.ID)), top.Covers, len(untested)))
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString("**Untested functions this could break:**\n")
+	for _, it := range untested {
+		b.WriteString("- " + namedFile(it.Name, it.ID, it.FilePath) + "\n")
+	}
+
+	b.WriteString(detailsBlock(r, untested))
+
+	b.WriteString("\n**To proceed:** add the test(s) above. This check is **advisory by default** — it only blocks the pipeline when the project sets a `FAULTLINE_GATE` threshold.\n")
+	b.WriteString(faultlineFooter())
+	return b.String()
+}
+
+// detailsBlock is the collapsible "for reviewers who want the math" section: the
+// full impact table (with a slot for the diagram), the provably-minimal test set,
+// the per-node coverage ranking, and the Shapley risk split. The precise terms
+// (minimum vertex cut, Shapley, dominance) live here, not in the summary.
+func detailsBlock(r report, untested []impacted) string {
+	var b strings.Builder
+	b.WriteString("\n<details><summary>📋 Full impact, recommended tests, and the math</summary>\n\n")
+
+	b.WriteString("**Everything this change can reach:**\n\n| Affected function | File | Hops from change |\n|---|---|---|\n")
 	for _, it := range r.BlastRadius {
-		name := it.Name
-		if name == "" {
-			name = fmt.Sprintf("(unresolved #%s)", it.ID)
-		}
-		file := it.FilePath
-		if file == "" {
-			file = "—"
-		}
-		b.WriteString(fmt.Sprintf("| %s | %s | %d |\n", mdCode(name), mdCell(file), it.Distance))
+		b.WriteString(fmt.Sprintf("| %s | %s | %d |\n", mdCode(named(it.Name, it.ID)), mdCell(orDash(it.FilePath)), it.Distance))
 	}
 	if rc := recipeComparison(r); rc != "" {
 		b.WriteString(rc)
 	}
-	if len(untested) > 0 {
-		b.WriteString(fmt.Sprintf("\n🚦 **Untested blast radius — %d impacted definition(s) with NO test coverage** (highest risk):\n", len(untested)))
-		for _, it := range untested {
-			name := it.Name
-			if name == "" {
-				name = fmt.Sprintf("(unresolved #%s)", it.ID)
-			}
-			file := it.FilePath
-			if file == "" {
-				file = "—"
-			}
-			b.WriteString(fmt.Sprintf("- %s (%s)\n", mdCode(name), mdCell(file)))
-		}
-	}
+	b.WriteString("\n<!--FAULTLINE_DIAGRAM-->\n")
+
 	if len(r.MinimumTestSet) > 0 {
-		b.WriteString(fmt.Sprintf("\n🔧 **Minimum test set — add a test at these %d definition(s) to gate the whole change** (vs %d untested):\n", len(r.MinimumTestSet), r.UntestedCount))
+		b.WriteString(fmt.Sprintf("\n**Smallest set of tests that gates the whole change** (%d, vs %d untested):\n", len(r.MinimumTestSet), r.UntestedCount))
 		for _, t := range r.MinimumTestSet {
-			name := t.Name
-			if name == "" {
-				name = fmt.Sprintf("(unresolved #%s)", t.ID)
-			}
-			file := t.FilePath
-			if file == "" {
-				file = "—"
-			}
-			b.WriteString(fmt.Sprintf("- %s (%s)\n", mdCode(name), mdCell(file)))
+			b.WriteString("- " + namedFile(t.Name, t.ID, t.FilePath) + "\n")
 		}
-		b.WriteString("\n<sub>Provably minimal: a minimum vertex cut over the impact graph (Menger / max-flow) — testing these intercepts every known path from the change to untested code, fewer than a greedy set-cover. Coverage is inferred from test-name references (a heuristic), so the cut is minimal with respect to that signal.</sub>\n")
+		b.WriteString("\n<sub>Provably the *smallest* such set — a minimum vertex cut (Menger / max-flow) over the impact graph, machine-checked against brute force; fewer than a greedy heuristic. \"Untested\" is inferred from test-name references, so it is minimal with respect to that signal.</sub>\n")
 	}
+
+	if len(r.CoverageRanking) > 0 {
+		b.WriteString("\n**Where a single test covers the most** (each on its own):\n\n| Add one test at | Untested it covers |\n|---|---|\n")
+		for i, c := range r.CoverageRanking {
+			if i >= 5 {
+				break
+			}
+			b.WriteString(fmt.Sprintf("| %s | %d |\n", mdCode(named(c.Name, c.ID)), c.Covers))
+		}
+		b.WriteString("\n<sub>A test at a node gates every untested function it *dominates* (lies on every path from the change to it) — the same interception model as the minimum set, ranked per node.</sub>\n")
+	}
+
 	if len(r.RiskAttribution) >= 2 {
-		b.WriteString("\n📊 **Untested-risk attribution — which changed symbol owns the gap")
+		b.WriteString("\n**Who owns the gap** (share of the untested risk per changed symbol")
 		if !r.RiskAttributionExact {
-			b.WriteString(" (approximate)")
+			b.WriteString(", approximate")
 		}
-		b.WriteString(":**\n")
+		b.WriteString("):\n")
 		for _, s := range r.RiskAttribution {
-			name := s.Name
-			if name == "" {
-				name = fmt.Sprintf("(unresolved #%s)", s.ID)
-			}
-			file := s.FilePath
-			if file == "" {
-				file = "—"
-			}
-			b.WriteString(fmt.Sprintf("- %s (%s) — **%.0f%%** (≈%.1f untested def(s))\n", mdCode(name), mdCell(file), s.SharePct, s.Shapley))
+			b.WriteString(fmt.Sprintf("- %s — **%.0f%%**\n", mdCode(named(s.Name, s.ID)), s.SharePct))
 		}
-		b.WriteString("\n<sub>Exact Shapley value over the untested-impact coverage function: each changed symbol's average marginal contribution across all coalitions. Shares sum to the total untested count, so shared downstream impact is split fairly, not double-counted.</sub>\n")
+		b.WriteString("\n<sub>Exact Shapley value over the untested-impact function: each symbol's average marginal contribution across all coalitions; shares sum to the total, so shared downstream code is not double-counted.</sub>\n")
 	}
-	b.WriteString("\n<sub>Transitive reverse-`CALLS`/`EXTENDS` closure computed by the Faultline engine over GitLab Orbit's knowledge graph.</sub>\n")
+
+	b.WriteString("\n</details>\n")
 	return b.String()
+}
+
+func faultlineFooter() string {
+	return "\n<sub>Computed deterministically by the Faultline engine from GitLab Orbit's code graph — there is no AI in the decision, so the same change always gives the same verdict. Coverage is a name-reference heuristic (not runtime coverage): it errs toward flagging and can miss dynamically-dispatched calls.</sub>\n"
+}
+
+// --- small rendering helpers (keep all user-supplied text escaped) ---
+
+func named(name, id string) string {
+	if name == "" {
+		return fmt.Sprintf("(unresolved #%s)", id)
+	}
+	return name
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
+}
+
+func namedFile(name, id, file string) string {
+	return mdCode(named(name, id)) + " (" + mdCell(orDash(file)) + ")"
+}
+
+func joinCode(names []string) string {
+	parts := make([]string, 0, len(names))
+	for _, n := range names {
+		parts = append(parts, mdCode(n))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func joinCutNodes(cs []cutNode) string {
+	parts := make([]string, 0, len(cs))
+	for _, c := range cs {
+		parts = append(parts, mdCode(named(c.Name, c.ID)))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // postMRNote posts body as a note on a merge request via the GitLab REST API.
@@ -822,10 +927,9 @@ func main() {
 	// Closed-loop hand-off: the minimum test set is the exact goal for a Duo flow.
 	md += duoHandoff(rep.MinimumTestSet)
 
-	if mer := buildMermaid(g, changed, rep, untested); mer != "" {
-		// Insert the blast-radius diagram just above the attribution footer.
-		md = strings.Replace(md, "\n<sub>Transitive", "\n"+mer+"\n<sub>Transitive", 1)
-	}
+	// Drop the diagram into the details block's placeholder (or remove the
+	// placeholder when there is nothing to draw).
+	md = strings.Replace(md, "<!--FAULTLINE_DIAGRAM-->", buildMermaid(g, changed, rep, untested), 1)
 	if truncated {
 		md += fmt.Sprintf("\n> ⚠️ **Note:** an Orbit query hit the %d-row limit, so the analyzed graph may be partial. Set `FAULTLINE_QUERY_LIMIT` higher for complete results.\n", limit)
 	}

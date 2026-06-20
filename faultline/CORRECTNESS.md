@@ -49,6 +49,27 @@ reachable once the cut is removed) *and* equal the true minimum size over all su
 Construction inputs are sorted, so the chosen minimum cut is canonical (reproducible),
 not just *a* minimum cut.
 
+## The coverage-ranking guarantee (dominance)
+
+The minimum cut gives the optimal *set*; the coverage ranking answers the everyday
+question "**if I write only one test, where?**". A test at node `X` gates every
+untested node that `X` **dominates** — a node that becomes unreachable from the
+changed set once `X` is removed lies on *every* impact path from the change to it,
+so testing `X` intercepts them all. This is the *same* interception model as the
+minimum cut (Menger), exposed per node and ranked by how many untested definitions
+each single test would gate. When one node dominates *all* untested code, that is the
+single choke point (and necessarily the size-1 minimum cut).
+
+**Invariant:** `coverage_ranking` reports, for each currently-untested impacted node,
+the exact count of untested nodes a single test there would gate — computed by
+removal-reachability (dominance), deterministic and sorted by (covers, name, id).
+
+**How it's enforced:** `coverage_ranking_finds_single_choke_point`,
+`coverage_ranking_diamond_has_no_false_choke`, and
+`coverage_ranking_skips_tested_and_empty_when_all_tested` (`engine/src/main.rs`)
+check the choke-point, the two-independent-paths case (no false single test), and that
+already-tested nodes are excluded as candidates.
+
 ## The risk-attribution guarantee (exact Shapley)
 
 When several symbols change together their blast radii overlap, so a naive per-symbol

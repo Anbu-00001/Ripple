@@ -176,6 +176,96 @@ fn impact_adjacency(graph: &Graph) -> HashMap<&str, Vec<&str>> {
     imp
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct CoverageRank {
+    id: String,
+    name: String,
+    file_path: String,
+    /// Number of untested impacted definitions a single test at this node would
+    /// gate (this node plus every untested node it dominates).
+    covers: usize,
+}
+
+/// Per-node coverage ranking — "where does one test buy the most?".
+///
+/// A test placed at node `X` gates every untested impacted node that `X`
+/// *dominates*: a node that becomes unreachable from the changed set once `X` is
+/// removed lies on *every* impact path from the change to that node, so testing
+/// `X` intercepts all of them. This is the SAME interception model as
+/// `min_test_cut` (Menger), exposed per node so the verdict can say "a test here
+/// covers N of M untested" and surface the single highest-leverage test (and, when
+/// one node covers everything, the single choke point). It complements — does not
+/// replace — the provably-minimal cut: the cut is the optimal *set*; this ranks
+/// individual nodes by leverage. Deterministic: sorted by (covers desc, name, id).
+fn coverage_ranking(graph: &Graph, changed: &[String], tested: &[String]) -> Vec<CoverageRank> {
+    let report = analyze(graph, changed);
+    if report.blast_radius.is_empty() {
+        return Vec::new();
+    }
+    let tested_set: HashSet<&str> = tested.iter().map(String::as_str).collect();
+    let untested: Vec<&str> = report
+        .blast_radius
+        .iter()
+        .map(|x| x.id.as_str())
+        .filter(|id| !tested_set.contains(id))
+        .collect();
+    if untested.is_empty() {
+        return Vec::new();
+    }
+    let imp = impact_adjacency(graph);
+    let changed_ids: Vec<&str> = changed.iter().map(String::as_str).collect();
+
+    // Nodes reachable from the changed set over impact-propagation edges
+    // (callee -> callers) WITHOUT visiting `skip`.
+    let reachable = |skip: &str| -> HashSet<&str> {
+        let mut seen: HashSet<&str> = HashSet::new();
+        let mut stack: Vec<&str> = Vec::new();
+        for c in &changed_ids {
+            for n in imp.get(c).into_iter().flatten() {
+                if *n != skip && seen.insert(*n) {
+                    stack.push(*n);
+                }
+            }
+        }
+        while let Some(cur) = stack.pop() {
+            for n in imp.get(cur).into_iter().flatten() {
+                if *n != skip && seen.insert(*n) {
+                    stack.push(*n);
+                }
+            }
+        }
+        seen
+    };
+
+    let mut ranks: Vec<CoverageRank> = Vec::new();
+    for it in &report.blast_radius {
+        let x = it.id.as_str();
+        if tested_set.contains(x) {
+            continue; // suggest new tests at currently-untested nodes
+        }
+        let reach = reachable(x);
+        let covers = untested
+            .iter()
+            .filter(|u| **u == x || !reach.contains(*u))
+            .count();
+        if covers > 0 {
+            ranks.push(CoverageRank {
+                id: it.id.clone(),
+                name: it.name.clone(),
+                file_path: it.file_path.clone(),
+                covers,
+            });
+        }
+    }
+    ranks.sort_by(|a, b| {
+        b.covers
+            .cmp(&a.covers)
+            .then_with(|| a.name.cmp(&b.name))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    ranks
+}
+
 /// Minimum test-placement cut.
 ///
 /// Models test-gap remediation as a minimum s-t **vertex** cut (Even's node-splitting
@@ -617,6 +707,8 @@ struct FullReport {
     risk_attribution: Vec<RiskShare>,
     /// false if the attribution was sampled (very large changed set) rather than exact.
     risk_attribution_exact: bool,
+    /// Per-node "where one test buys the most" ranking (dominance-based coverage).
+    coverage_ranking: Vec<CoverageRank>,
 }
 
 fn main() {
@@ -676,6 +768,7 @@ fn main() {
     let report = analyze(&graph, &changed);
     let cut = min_test_cut(&graph, &changed, &tested);
     let risk = shapley_risk(&graph, &changed, &tested);
+    let coverage = coverage_ranking(&graph, &changed, &tested);
     let full = FullReport {
         blast: report,
         untested_count: cut.untested_count,
@@ -683,6 +776,7 @@ fn main() {
         minimum_test_set: cut.targets,
         risk_attribution: risk.shares,
         risk_attribution_exact: risk.exact,
+        coverage_ranking: coverage,
     };
     match serde_json::to_string_pretty(&full) {
         Ok(s) => println!("{s}"),
@@ -870,6 +964,63 @@ mod tests {
             ids(&analyze(&same, &changed)),
             "closure must be identical regardless of language"
         );
+    }
+
+    #[test]
+    fn coverage_ranking_finds_single_choke_point() {
+        // change <- helper <- {a, b, c}: every caller routes through `helper`, so a
+        // test at helper gates helper + a + b + c (covers all 4 untested).
+        let g = Graph {
+            nodes: vec![
+                node("CH", "change", "f"),
+                node("H", "helper", "f"),
+                node("A", "a", "f"),
+                node("B", "b", "f"),
+                node("C", "c", "f"),
+            ],
+            edges: vec![edge("H", "CH"), edge("A", "H"), edge("B", "H"), edge("C", "H")],
+        };
+        let r = coverage_ranking(&g, &["CH".to_string()], &[]);
+        assert_eq!(r[0].name, "helper");
+        assert_eq!(r[0].covers, 4); // helper + a + b + c
+        // a/b/c each only cover themselves (1).
+        for cr in r.iter().filter(|x| x.name != "helper") {
+            assert_eq!(cr.covers, 1, "{} should cover only itself", cr.name);
+        }
+    }
+
+    #[test]
+    fn coverage_ranking_diamond_has_no_false_choke() {
+        // change <- a, change <- b, and d calls both a and b: d is reachable by two
+        // independent paths, so NO single test covers everything (max covers == 1).
+        let g = Graph {
+            nodes: vec![
+                node("CH", "change", "f"),
+                node("A", "a", "f"),
+                node("B", "b", "f"),
+                node("D", "d", "f"),
+            ],
+            edges: vec![edge("A", "CH"), edge("B", "CH"), edge("D", "A"), edge("D", "B")],
+        };
+        let r = coverage_ranking(&g, &["CH".to_string()], &[]);
+        assert_eq!(r.len(), 3); // a, b, d
+        assert!(r.iter().all(|x| x.covers == 1), "no node should dominate another: {r:?}");
+    }
+
+    #[test]
+    fn coverage_ranking_skips_tested_and_empty_when_all_tested() {
+        // chain change <- a <- b; if b is tested, candidates are the untested ones.
+        let g = Graph {
+            nodes: vec![node("CH", "change", "f"), node("A", "a", "f"), node("B", "b", "f")],
+            edges: vec![edge("A", "CH"), edge("B", "A")],
+        };
+        let r = coverage_ranking(&g, &["CH".to_string()], &["B".to_string()]);
+        // a covers itself; b is tested so not a candidate; b is excluded from untested too.
+        assert!(r.iter().all(|x| x.name != "b"), "tested node must not be a candidate");
+        assert_eq!(r[0].name, "a");
+        // everything tested => no ranking.
+        let none = coverage_ranking(&g, &["CH".to_string()], &["A".to_string(), "B".to_string()]);
+        assert!(none.is_empty());
     }
 
     #[test]

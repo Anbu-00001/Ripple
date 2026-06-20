@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -64,11 +65,11 @@ func TestResolveChanged(t *testing.T) {
 
 func TestRenderMarkdownEmptyBlastRadius(t *testing.T) {
 	md := renderMarkdown(report{ImpactedCount: 0}, []string{"ApplyDiscount"}, nil)
-	if !strings.Contains(md, "Empty blast radius") {
+	if !strings.Contains(md, "Safe to merge") {
 		t.Fatalf("empty radius should be called out, got:\n%s", md)
 	}
-	if strings.Contains(md, "| Impacted definition |") {
-		t.Fatalf("empty radius must not render a table, got:\n%s", md)
+	if strings.Contains(md, "Affected function |") {
+		t.Fatalf("empty radius must not render an impact table, got:\n%s", md)
 	}
 	if !strings.Contains(md, "`ApplyDiscount`") {
 		t.Fatalf("changed name should be shown, got:\n%s", md)
@@ -85,10 +86,10 @@ func TestRenderMarkdownDeepChainFlagsCap(t *testing.T) {
 		},
 	}
 	md := renderMarkdown(r, []string{"applyRate"}, nil)
-	if !strings.Contains(md, "2 definition(s) transitively affected") {
+	if !strings.Contains(md, "could affect **2** other function(s)") {
 		t.Fatalf("missing impact count, got:\n%s", md)
 	}
-	if !strings.Contains(md, "beyond Orbit's 3-hop query cap") {
+	if !strings.Contains(md, "past Orbit's 3-hop query limit") {
 		t.Fatalf("depth>3 should flag the 3-hop cap (the moat), got:\n%s", md)
 	}
 	if !strings.Contains(md, "| `CalculateTax` | calc/tax.go | 1 |") {
@@ -223,8 +224,11 @@ func TestQueryLimitRespectsEnvAndBuildersHonorIt(t *testing.T) {
 func TestRenderMarkdownShowsUntestedSection(t *testing.T) {
 	r := report{ImpactedCount: 1, MaxDepth: 2, BlastRadius: []impacted{{Name: "TotalWithTax", FilePath: "calc/order.go", Distance: 1}}}
 	md := renderMarkdown(r, []string{"CalculateTax"}, []impacted{{Name: "TotalWithTax", FilePath: "calc/order.go", Distance: 1}})
-	if !strings.Contains(md, "Untested blast radius") {
-		t.Fatalf("untested section missing:\n%s", md)
+	if !strings.Contains(md, "reaches untested code") {
+		t.Fatalf("untested headline missing:\n%s", md)
+	}
+	if !strings.Contains(md, "Untested functions this could break") {
+		t.Fatalf("untested list missing:\n%s", md)
 	}
 	if !strings.Contains(md, "`TotalWithTax`") {
 		t.Fatalf("untested symbol not listed:\n%s", md)
@@ -431,18 +435,18 @@ func TestRenderMarkdownShowsMinimumTestSet(t *testing.T) {
 		UntestedCount:  4,
 		MinimumTestSet: []cutNode{{ID: "M", Name: "CalculateTax", FilePath: "calc/tax.rb"}},
 	}
-	md := renderMarkdown(r, []string{"standardRate"}, nil)
-	if !strings.Contains(md, "Minimum test set") || !strings.Contains(md, "these 1 definition") {
-		t.Errorf("expected minimum-test-set section, got:\n%s", md)
+	md := renderMarkdown(r, []string{"standardRate"}, []impacted{{Name: "CalculateTax", Distance: 1}})
+	if !strings.Contains(md, "Fastest fix") || !strings.Contains(md, "`CalculateTax`") {
+		t.Errorf("expected the plain-language fix headline, got:\n%s", md)
 	}
-	if !strings.Contains(md, "vs 4 untested") {
-		t.Errorf("expected 'vs 4 untested' framing, got:\n%s", md)
+	if !strings.Contains(md, "Smallest set of tests that gates the whole change") || !strings.Contains(md, "vs 4 untested") {
+		t.Errorf("expected the minimum-test-set detail with 'vs 4 untested', got:\n%s", md)
 	}
 	if !strings.Contains(md, "minimum vertex cut") {
-		t.Errorf("expected the provably-minimal attribution, got:\n%s", md)
+		t.Errorf("expected the provably-minimal attribution in details, got:\n%s", md)
 	}
 	// when there is no cut, the section must be absent.
-	if strings.Contains(renderMarkdown(report{ImpactedCount: 1, BlastRadius: []impacted{{Name: "X"}}}, nil, nil), "Minimum test set") {
+	if strings.Contains(renderMarkdown(report{ImpactedCount: 1, BlastRadius: []impacted{{Name: "X"}}}, nil, nil), "Smallest set of tests") {
 		t.Errorf("min-test-set section must not render when empty")
 	}
 }
@@ -458,8 +462,8 @@ func TestRenderMarkdownShowsRiskAttribution(t *testing.T) {
 		},
 		RiskAttributionExact: true,
 	}
-	md := renderMarkdown(r, []string{"parseConfig", "loadEnv"}, nil)
-	if !strings.Contains(md, "Untested-risk attribution") {
+	md := renderMarkdown(r, []string{"parseConfig", "loadEnv"}, []impacted{{Name: "startServer", Distance: 1}})
+	if !strings.Contains(md, "Who owns the gap") {
 		t.Fatalf("risk-attribution section missing:\n%s", md)
 	}
 	if !strings.Contains(md, "`parseConfig`") || !strings.Contains(md, "67%") {
@@ -468,20 +472,51 @@ func TestRenderMarkdownShowsRiskAttribution(t *testing.T) {
 	if !strings.Contains(md, "Shapley value") {
 		t.Fatalf("expected the Shapley attribution note:\n%s", md)
 	}
-	if strings.Contains(md, "(approximate)") {
+	if strings.Contains(md, "approximate") {
 		t.Fatalf("exact attribution must NOT be labeled approximate:\n%s", md)
 	}
 
 	// A single changed symbol owns 100% trivially — that's noise, so it must be hidden.
 	one := report{ImpactedCount: 1, BlastRadius: []impacted{{Name: "X"}},
 		RiskAttribution: []riskShare{{ID: "P", Name: "p", Shapley: 1, SharePct: 100}}}
-	if strings.Contains(renderMarkdown(one, nil, nil), "Untested-risk attribution") {
+	if strings.Contains(renderMarkdown(one, nil, nil), "Who owns the gap") {
 		t.Errorf("attribution must be hidden for a single changed symbol")
 	}
 
 	// Sampled (large changed set) attribution must be flagged honestly.
 	r.RiskAttributionExact = false
-	if !strings.Contains(renderMarkdown(r, nil, nil), "(approximate)") {
-		t.Errorf("sampled attribution must be labeled approximate:\n%s", renderMarkdown(r, nil, nil))
+	if !strings.Contains(renderMarkdown(r, nil, []impacted{{Name: "startServer"}}), "approximate") {
+		t.Errorf("sampled attribution must be labeled approximate:\n%s", renderMarkdown(r, nil, []impacted{{Name: "startServer"}}))
+	}
+}
+
+func TestBuildMermaidDeHairballsLargeRadius(t *testing.T) {
+	// 30 callers of a changed node: the diagram must collapse to essential nodes.
+	nodes := []gNode{{ID: "CH", Name: "changed"}}
+	edges := []gEdge{}
+	radius := []impacted{}
+	untested := []impacted{}
+	for i := 0; i < 30; i++ {
+		id := fmt.Sprintf("n%d", i)
+		nodes = append(nodes, gNode{ID: id, Name: id})
+		edges = append(edges, gEdge{Type: "CALLS", From: id, To: "CH"})
+		radius = append(radius, impacted{ID: id, Name: id, Distance: 1})
+		if i < 2 { // only 2 are untested
+			untested = append(untested, impacted{ID: id, Name: id, Distance: 1})
+		}
+	}
+	g := graph{Nodes: nodes, Edges: edges}
+	r := report{ImpactedCount: 30, MaxDepth: 1, BlastRadius: radius,
+		MinimumTestSet: []cutNode{{ID: "n0", Name: "n0"}, {ID: "n1", Name: "n1"}}}
+	md := buildMermaid(g, []string{"CH"}, r, untested)
+	if !strings.Contains(md, "more impacted node(s) hidden") {
+		t.Fatalf("large radius should truncate the diagram, got:\n%s", md)
+	}
+	// essential = changed + 2 untested (= min test set); the other 28 must be gone.
+	if strings.Contains(md, "\"n5\"") || strings.Contains(md, "\"n20\"") {
+		t.Fatalf("non-essential node leaked into the de-hairballed diagram:\n%s", md)
+	}
+	if !strings.Contains(md, "\"changed\"") || !strings.Contains(md, "\"n0\"") {
+		t.Fatalf("essential nodes (change + untested) must remain:\n%s", md)
 	}
 }

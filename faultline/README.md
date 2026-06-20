@@ -4,9 +4,20 @@
 
 > Orbit can *describe* a change's blast radius. **Faultline makes Orbit *enforce* it** — Code Owners for the blast radius, not the diff.
 
-**62 deterministic tests** · Rust engine: 28 example + **3 property tests proving the closure is complete, the minimum test set is provably minimal, and the Shapley risk split is exact** · Go agent: 31 · **polyglot (Go + Python + Ruby) + CODEOWNERS governance + Duo closed loop** · runs as a GitLab CI gate · [why it's correct →](CORRECTNESS.md)
+**66 deterministic tests** · Rust engine: 31 example + **3 property tests proving the closure is complete, the minimum test set is provably minimal, and the Shapley risk split is exact** · Go agent: 32 · **polyglot (Go + Python + Ruby) + CODEOWNERS governance + Duo closed loop** · runs as a GitLab CI gate · [why it's correct →](CORRECTNESS.md)
 
-Faultline computes the **full transitive set of callers** ("blast radius") of the symbols changed in a merge request, intersects it with the impacted code that **lacks test coverage**, and **fails the pipeline (blocks the merge)** when an untested blast radius is found. A green-looking one-line helper change that silently reaches deep, untested code becomes a *blocked* MR with an explained verdict.
+Faultline computes the **full transitive set of callers** ("blast radius") of the symbols changed in a merge request, intersects it with the impacted code that **lacks test coverage**, and **fails the pipeline (blocks the merge)** when an untested blast radius is found. A green-looking one-line helper change that silently reaches deep, untested code becomes a *blocked* MR with an explained verdict — written in plain language ("*Changing `parseConfig` could affect 6 functions; 3 have no tests; add 1 test at `parse_tokens` to cover them all*"), with the graph theory tucked into an expandable section for reviewers who want it.
+
+## The problem (documented GitLab pain)
+
+- **Code review only sees the diff.** A one-line change to a shared helper can break code *three files away* that no reviewer looked at. GitLab's own Orbit cookbook frames the question ("*what breaks if I change this service?*") — but its query DSL stops at 3 hops.
+- **Code Owners only gate the diff, not the blast radius.** CODEOWNERS requires approval from owners of *changed* files only; owners of transitively-impacted files are never pulled in — a gap implicated in real approval-bypass issues ([gitlab-org/gitlab#437988](https://gitlab.com/gitlab-org/gitlab/-/issues/437988), [#436977](https://gitlab.com/gitlab-org/gitlab/-/issues/436977)).
+- **Coverage gates are blunt.** The Premium *Coverage-Check* rule blocks on a global percentage, which developers "game" with low-value tests — it can't say *which* impacted code is the one that actually needs a test.
+- **AI writes code faster than humans can vet it.** Agentic coding raises regression risk exactly where review is thinnest; a fast, deterministic "what did this really touch, and is it tested?" check is the missing guardrail.
+
+## How it's different from existing tools (honest)
+
+Change-impact and test-impact analysis aren't new — Microsoft's Test Impact Analysis, CodeScene, Sourcegraph, and prior hackathon entries all do versions of it. Faultline's defensible edge is the **bundle**: (1) genuine depth **past Orbit's 3-hop cap** (verifiable), (2) outputs that are **deterministic and provable** — minimum test set, exact attribution — with **no model in the decision path**, (3) **empirical proof** on real bugs (below), and (4) **radical honesty** — it refuses the cross-domain graph joins Orbit's schema can't support, and states its own soundness boundary. A tool whose pitch is "the AI figures it out" structurally can't make claims (1)–(4).
 
 ---
 
@@ -41,6 +52,7 @@ It also renders a **mermaid** diagram of the blast subgraph (changed = blue, unt
 Beyond flagging the gap, Faultline **prescribes the fix**:
 
 - **Minimum test set** — a *provably-minimal* vertex cut (Even node-splitting → max-flow / min-cut, Menger) giving the **fewest** definitions to add a test at to gate the *entire* change. One well-placed test often intercepts many untested paths, so the verdict says "test these **K**, not all **N**" — beating a greedy set-cover, machine-checked against a brute-force oracle.
+- **Coverage ranking** — beyond the optimal *set*, a per-node ranking of **where one test buys the most** ("a single test at `parse_tokens` covers 5 of 6 untested"), via dominance over the impact graph (same interception model as the cut). It surfaces the single highest-leverage test — and the single choke point when one exists — so a developer short on time knows exactly where to start.
 - **Untested-risk attribution** — an **exact Shapley value** per changed symbol ("which change owns the gap": `parseConfig` owns 66%, `loadEnv` 34%). Overlapping blast radii are split fairly, not double-counted; the shares sum to the true untested total (efficiency axiom), verified against the textbook permutation definition.
 - **Code owners beyond the diff** — Faultline reads the project's real **CODEOWNERS** file and maps it onto the *blast radius*, surfacing owners of impacted-but-unchanged files that GitLab's diff-only Code Owners approval would never pull in. *Code Owners for the blast radius, not the diff* — the literal promise, enforced (last-match precedence, sections, and the gitignore glob subset, all tested).
 - **Closed loop with GitLab Duo** — the minimum test set is the exact goal to hand to an agent, so the verdict @-mentions a Duo flow (GitLab's documented trigger) to open a **draft** MR adding that test; a human still approves and the gate never auto-merges. See **[CLOSED_LOOP.md](CLOSED_LOOP.md)**.
@@ -68,8 +80,8 @@ This is proven, not asserted:
 
 | Component | Role | Tests |
 |---|---|---|
-| **Rust engine** (`engine/`) | Pure, deterministic BFS over reverse-`CALLS`/`EXTENDS` edges → the complete transitive caller set with shortest-caller distances (`O(V+E)`, cycle-safe), **plus the provably-minimal minimum test set (min vertex cut) and exact Shapley untested-risk attribution**. | 31 |
-| **Go agent** (`agent/`) | Pulls Definitions + 1-hop `CALLS`/`EXTENDS` edges from Orbit (`POST /api/v4/orbit/query`), normalizes, runs the engine, scans the checked-out repo for tests of impacted symbols, renders the Markdown verdict (blast radius, minimum test set, Shapley attribution, **CODEOWNERS owners beyond the diff**, **Duo closed-loop hand-off**) + mermaid + a self-contained interactive HTML graph, posts it to the MR, and exits non-zero to gate. | 31 |
+| **Rust engine** (`engine/`) | Pure, deterministic BFS over reverse-`CALLS`/`EXTENDS` edges → the complete transitive caller set with shortest-caller distances (`O(V+E)`, cycle-safe), **plus the provably-minimal minimum test set (min vertex cut), the per-node coverage ranking (dominance), and exact Shapley untested-risk attribution**. | 34 |
+| **Go agent** (`agent/`) | Pulls Definitions + 1-hop `CALLS`/`EXTENDS` edges from Orbit (`POST /api/v4/orbit/query`), normalizes, runs the engine, scans the checked-out repo for tests of impacted symbols, renders the **plain-language** verdict (blast radius, minimum test set, coverage ranking, Shapley attribution, **CODEOWNERS owners beyond the diff**, **Duo closed-loop hand-off**) with the math behind progressive disclosure + a de-cluttered mermaid + a self-contained interactive HTML graph, posts it to the MR, and exits non-zero to gate. | 32 |
 
 Runs as a GitLab CI job on `merge_request_event`. A companion **declarative GitLab Duo agent** (`agents/faultline-impact-reviewer.yml`) is published to the **AI Catalog** as the always-on, in-platform front door (see `CATALOG.md`).
 
@@ -102,8 +114,8 @@ The job pulls the call graph from Orbit for the MR's changed files, computes the
 ## Run the tests
 
 ```console
-$ (cd engine && cargo test)   # 31 passed (incl. 3 property tests + language-blind closure) — closure, min-cut, Shapley
-$ (cd agent  && go test ./...) # 31 passed — normalize, render, gate, mermaid, interactive graph, polyglot E2E, CODEOWNERS governance, Duo hand-off
+$ (cd engine && cargo test)   # 34 passed (incl. 3 property tests + language-blind closure) — closure, min-cut, coverage, Shapley
+$ (cd agent  && go test ./...) # 32 passed — normalize, render, gate, mermaid, interactive graph, polyglot E2E, CODEOWNERS governance, Duo hand-off
 ```
 
 ## Honesty boundaries (by design)
