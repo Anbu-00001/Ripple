@@ -239,7 +239,8 @@ const vizTemplate = `<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Faultline — change-impact graph</title>
 <style>
-  :root{--bg:#0d1117;--fg:#e6edf3;--muted:#8b949e;--changed:#1f6feb;--untested:#f85149;--impacted:#6e7681;--edge:#30363d;}
+  /* Okabe-Ito colorblind-safe palette (distinct by luminance, not just hue) */
+  :root{--bg:#0d1117;--fg:#e6edf3;--muted:#8b949e;--changed:#0072B2;--untested:#D55E00;--impacted:#009E73;--edge:#30363d;}
   html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;}
   #wrap{display:flex;flex-direction:column;height:100%;}
   header{padding:10px 14px;border-bottom:1px solid var(--edge);}
@@ -250,9 +251,11 @@ const vizTemplate = `<!DOCTYPE html>
   .dot{width:10px;height:10px;border-radius:50%;display:inline-block;}
   #svg{flex:1;width:100%;cursor:grab;touch-action:none;}
   #svg.drag{cursor:grabbing;}
+  /* Non-color redundancy so role is legible without relying on hue: bold ring =
+     changed, dashed ring = untested, thin ring = tested. */
   .node circle{stroke:#0d1117;stroke-width:1.5px;cursor:pointer;}
-  .node.changed circle{fill:var(--changed);}
-  .node.untested circle{fill:var(--untested);}
+  .node.changed circle{fill:var(--changed);stroke:#fff;stroke-width:3px;}
+  .node.untested circle{fill:var(--untested);stroke:#fff;stroke-width:2px;stroke-dasharray:3 2;}
   .node.impacted circle{fill:var(--impacted);}
   .node text{fill:var(--fg);font-size:11px;pointer-events:none;paint-order:stroke;stroke:#0d1117;stroke-width:3px;}
   line.edge{stroke:var(--edge);stroke-width:1.5px;}
@@ -266,13 +269,13 @@ const vizTemplate = `<!DOCTYPE html>
     <h1>🪨 Faultline — change-impact graph</h1>
     <p id="sub"></p>
     <div class="legend">
-      <span><i class="dot" style="background:var(--changed)"></i>changed</span>
-      <span><i class="dot" style="background:var(--untested)"></i>untested impacted</span>
-      <span><i class="dot" style="background:var(--impacted)"></i>impacted (tested)</span>
+      <span><i class="dot" style="background:var(--changed);border:2px solid #fff"></i>changed (bold ring)</span>
+      <span><i class="dot" style="background:var(--untested);border:2px dashed #fff"></i>no test (dashed ring)</span>
+      <span><i class="dot" style="background:var(--impacted)"></i>has a test</span>
       <span class="m">scroll = zoom · drag background = pan · drag node = move · hover = details</span>
     </div>
   </header>
-  <svg id="svg" viewBox="0 0 960 640" preserveAspectRatio="xMidYMid meet">
+  <svg id="svg" viewBox="0 0 960 640" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Faultline change-impact graph: changed code (bold ring), code with no test (dashed ring), and code that has a test">
     <defs>
       <marker id="arrow" viewBox="0 0 10 10" refX="14" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
         <path d="M0,0 L10,5 L0,10 z" fill="#30363d"></path>

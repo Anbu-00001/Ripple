@@ -110,6 +110,7 @@ The job pulls the call graph from Orbit for the MR's changed files, computes the
 | `FAULTLINE_TEST_PATTERNS` | unset | Comma-separated extra test-file suffixes/path fragments (e.g. `.bats,/it/`) for non-standard conventions. |
 | `FAULTLINE_HTTP_TIMEOUT_SEC` | `30` | Per-request timeout for Orbit/GitLab calls. |
 | `FAULTLINE_DUO_FLOW` | unset | Duo flow service-account handle to @-mention for the closed-loop test hand-off (see [CLOSED_LOOP.md](CLOSED_LOOP.md)). Unset → the hand-off renders as guidance, never a fake mention. |
+| `FAULTLINE_HUB_FANIN` | `10` | Flag a changed symbol as a high-blast-radius "hub" when it has at least this many direct callers. `0` disables the alert. |
 
 ## Run the tests
 

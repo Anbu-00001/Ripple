@@ -446,18 +446,29 @@ func buildMermaid(g graph, changed []string, r report, untested []impacted) stri
 
 	var b strings.Builder
 	b.WriteString("```mermaid\ngraph TD\n")
+	// Shape redundancy (not color alone): changed = circle, no-test = diamond,
+	// tested/other = rectangle — legible for colorblind readers and in greyscale.
 	for _, id := range ids {
 		name := label[id]
 		if name == "" {
 			name = "unresolved#" + id
 		}
-		b.WriteString(fmt.Sprintf("  %s[\"%s\"]\n", mermaidID(id), mermaidLabel(name)))
+		nid, lbl := mermaidID(id), mermaidLabel(name)
+		switch {
+		case changedSet[id]:
+			b.WriteString(fmt.Sprintf("  %s((\"%s\"))\n", nid, lbl)) // circle = changed
+		case untestedSet[id]:
+			b.WriteString(fmt.Sprintf("  %s{\"%s\"}\n", nid, lbl)) // diamond = no test
+		default:
+			b.WriteString(fmt.Sprintf("  %s[\"%s\"]\n", nid, lbl)) // rectangle = tested/other
+		}
 	}
 	for _, e := range edges {
 		b.WriteString(fmt.Sprintf("  %s --> %s\n", mermaidID(e.from), mermaidID(e.to)))
 	}
-	b.WriteString("  classDef changed fill:#cfe2ff,stroke:#0a58ca,color:#000;\n")
-	b.WriteString("  classDef untested fill:#f8d7da,stroke:#b02a37,color:#000;\n")
+	// Okabe-Ito colorblind-safe fills (blue = changed, vermilion = no test).
+	b.WriteString("  classDef changed fill:#56B4E9,stroke:#0072B2,color:#000;\n")
+	b.WriteString("  classDef untested fill:#E69F00,stroke:#D55E00,color:#000;\n")
 	for _, id := range ids {
 		if changedSet[id] {
 			b.WriteString("  class " + mermaidID(id) + " changed;\n")
@@ -522,16 +533,21 @@ func recipeComparison(r report) string {
 // impact, the provably-minimal test set, per-node coverage, risk shares) tucked
 // into a collapsible section so an everyday developer can act in seconds while a
 // reviewer who wants the math can expand it.
-func renderMarkdown(r report, changedNames []string, untested []impacted) string {
+// renderMarkdown builds the MR verdict. It opens with ONE of three fixed status
+// badges (✅ Pass / ⚠️ Heads-up / ⛔ Blocked) so a reader pattern-matches in
+// seconds; `blocking` says whether this verdict will actually fail the pipeline,
+// so the badge matches reality. A plain-language summary + one action line lead;
+// the rigorous math is tucked into a collapsible <details>.
+func renderMarkdown(r report, changedNames []string, untested []impacted, blocking bool) string {
 	var b strings.Builder
-	b.WriteString("## 🪨 Faultline\n\n")
 
 	if r.ImpactedCount == 0 {
 		who := "the changed code"
 		if len(changedNames) > 0 {
 			who = joinCode(changedNames)
 		}
-		b.WriteString("✅ **Safe to merge.** Nothing else in the codebase calls " + who + ", so this change can't ripple outward (based on the indexed graph).\n")
+		b.WriteString("## 🪨 Faultline · ✅ Pass\n\n")
+		b.WriteString("**Safe to merge — nothing else in the codebase calls " + who + ", so this change can't ripple outward** (based on the indexed code graph).\n")
 		b.WriteString(faultlineFooter())
 		return b.String()
 	}
@@ -541,45 +557,50 @@ func renderMarkdown(r report, changedNames []string, untested []impacted) string
 		reach = fmt.Sprintf("Changing %s could affect **%d** other function(s)", joinCode(changedNames), r.ImpactedCount)
 	}
 	// Depth note (independent of test coverage): impact deeper than Orbit's query cap.
-	depthNote := fmt.Sprintf("up to **%d** call(s) deep", r.MaxDepth)
+	depthNote := fmt.Sprintf("up to **%d** call(s) away", r.MaxDepth)
 	if r.MaxDepth > orbitMaxHops {
-		depthNote = fmt.Sprintf("up to **%d** call(s) deep, past Orbit's %d-hop query limit", r.MaxDepth, orbitMaxHops)
+		depthNote = fmt.Sprintf("up to **%d** call(s) away, past Orbit's %d-call query limit", r.MaxDepth, orbitMaxHops)
 	}
 
 	if len(untested) == 0 {
-		b.WriteString("✅ **Looks safe.** " + reach + " (" + depthNote + "), and every one of them is already covered by a test.\n")
+		b.WriteString("## 🪨 Faultline · ✅ Pass\n\n")
+		b.WriteString("**Safe to merge — every function this change could affect is already covered by a test.**\n\n")
+		b.WriteString(reach + " (" + depthNote + ").\n")
 		b.WriteString(detailsBlock(r, untested))
 		b.WriteString(faultlineFooter())
 		return b.String()
 	}
 
-	// Untested blast radius — the headline case.
-	b.WriteString("### ⚠️ This change reaches untested code\n\n")
-	b.WriteString("**What's happening:** " + reach + fmt.Sprintf(" — up to **%d** call(s) away", r.MaxDepth))
-	if r.MaxDepth > orbitMaxHops {
-		b.WriteString(fmt.Sprintf(" (deeper than the diff shows, and past Orbit's %d-hop query limit)", orbitMaxHops))
+	// Untested blast radius — Blocked or Heads-up depending on the gate.
+	if blocking {
+		b.WriteString("## 🪨 Faultline · ⛔ Blocked\n\n")
+	} else {
+		b.WriteString("## 🪨 Faultline · ⚠️ Heads-up (won't block your merge)\n\n")
 	}
-	b.WriteString(fmt.Sprintf(". **%d** of them have **no tests**.\n\n", len(untested)))
+	b.WriteString(reach + " — " + depthNote + fmt.Sprintf(". **%d** of them have **no test**.\n", len(untested)))
 
 	if len(r.MinimumTestSet) > 0 {
-		b.WriteString(fmt.Sprintf("**Fastest fix:** add **%d** test(s) — at %s — to cover the whole change.\n",
+		b.WriteString(fmt.Sprintf("\n👉 **Fastest fix:** add **%d** test(s) — at %s — to cover the whole change.\n",
 			len(r.MinimumTestSet), joinCutNodes(r.MinimumTestSet)))
 		if len(r.MinimumTestSet) > 1 && len(r.CoverageRanking) > 0 && r.CoverageRanking[0].Covers > 1 {
 			top := r.CoverageRanking[0]
-			b.WriteString(fmt.Sprintf("\n💡 **Short on time?** A single test at %s covers **%d of %d** untested function(s) by itself.\n",
+			b.WriteString(fmt.Sprintf("\n💡 **Short on time?** A single test at %s protects **%d of %d** untested function(s) by itself.\n",
 				mdCode(named(top.Name, top.ID)), top.Covers, len(untested)))
 		}
-		b.WriteString("\n")
 	}
 
-	b.WriteString("**Untested functions this could break:**\n")
+	b.WriteString("\n**Functions with no test that this could break:**\n")
 	for _, it := range untested {
 		b.WriteString("- " + namedFile(it.Name, it.ID, it.FilePath) + "\n")
 	}
 
 	b.WriteString(detailsBlock(r, untested))
 
-	b.WriteString("\n**To proceed:** add the test(s) above. This check is **advisory by default** — it only blocks the pipeline when the project sets a `FAULTLINE_GATE` threshold.\n")
+	if blocking {
+		b.WriteString("\n**Why blocked, and how to change it:** your project set a `FAULTLINE_GATE` threshold. Add the test(s) above and re-run, or adjust the threshold in CI.\n")
+	} else {
+		b.WriteString("\n**This won't block your merge** unless your team turns blocking on (a `FAULTLINE_GATE` threshold); adding the test(s) above clears it.\n")
+	}
 	b.WriteString(faultlineFooter())
 	return b.String()
 }
@@ -592,7 +613,7 @@ func detailsBlock(r report, untested []impacted) string {
 	var b strings.Builder
 	b.WriteString("\n<details><summary>📋 Full impact, recommended tests, and the math</summary>\n\n")
 
-	b.WriteString("**Everything this change can reach:**\n\n| Affected function | File | Hops from change |\n|---|---|---|\n")
+	b.WriteString("**Everything this change can reach:**\n\n| Affected function | File | Calls away |\n|---|---|---|\n")
 	for _, it := range r.BlastRadius {
 		b.WriteString(fmt.Sprintf("| %s | %s | %d |\n", mdCode(named(it.Name, it.ID)), mdCell(orDash(it.FilePath)), it.Distance))
 	}
@@ -610,7 +631,7 @@ func detailsBlock(r report, untested []impacted) string {
 	}
 
 	if len(r.CoverageRanking) > 0 {
-		b.WriteString("\n**Where a single test covers the most** (each on its own):\n\n| Add one test at | Untested it covers |\n|---|---|\n")
+		b.WriteString("\n**Where a single test covers the most** (each on its own):\n\n| Add one test at | Untested it would protect |\n|---|---|\n")
 		for i, c := range r.CoverageRanking {
 			if i >= 5 {
 				break
@@ -637,7 +658,67 @@ func detailsBlock(r report, untested []impacted) string {
 }
 
 func faultlineFooter() string {
-	return "\n<sub>Computed deterministically by the Faultline engine from GitLab Orbit's code graph — there is no AI in the decision, so the same change always gives the same verdict. Coverage is a name-reference heuristic (not runtime coverage): it errs toward flagging and can miss dynamically-dispatched calls.</sub>\n"
+	return "\n✅ **Deterministic** — the same change always produces the same verdict; there is no AI in the decision.\n" +
+		"\n<sub>Faultline reads your code's call graph, not its runtime. \"No test\" means no test file refers to the function by name — this errs toward flagging (it won't tell you something is safe when it isn't), and can miss calls made dynamically.</sub>\n"
+}
+
+// hubFanInThreshold is the number of *direct* callers at or above which a changed
+// symbol is flagged as a "hub" (high-blast-radius). Tunable like the other knobs
+// (not a hidden magic constant); 0 disables the alert.
+func hubFanInThreshold() int {
+	if s := os.Getenv("FAULTLINE_HUB_FANIN"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return 10
+}
+
+// hubNotes flags changed symbols with many direct callers ("you changed a hub").
+// Pure function of the graph: fan-in = count of edges pointing INTO the changed
+// symbol (callers). Deterministic (sorted by fan-in desc, then name).
+func hubNotes(g graph, changed []string, threshold int) string {
+	if threshold <= 0 {
+		return ""
+	}
+	changedSet := map[string]bool{}
+	for _, id := range changed {
+		changedSet[id] = true
+	}
+	fanin := map[string]int{}
+	for _, e := range g.Edges {
+		if changedSet[e.To] {
+			fanin[e.To]++
+		}
+	}
+	nameByID := map[string]string{}
+	for _, n := range g.Nodes {
+		nameByID[n.ID] = n.Name
+	}
+	type hub struct {
+		name string
+		n    int
+	}
+	var hubs []hub
+	for id, n := range fanin {
+		if n >= threshold {
+			hubs = append(hubs, hub{named(nameByID[id], id), n})
+		}
+	}
+	if len(hubs) == 0 {
+		return ""
+	}
+	sort.Slice(hubs, func(i, j int) bool {
+		if hubs[i].n != hubs[j].n {
+			return hubs[i].n > hubs[j].n
+		}
+		return hubs[i].name < hubs[j].name
+	})
+	var b strings.Builder
+	for _, h := range hubs {
+		b.WriteString(fmt.Sprintf("\n🔗 **Hub change:** %s is called directly by **%d** functions — changes here are high-blast-radius, so review with extra care.\n", mdCode(h.name), h.n))
+	}
+	return b.String()
 }
 
 // --- small rendering helpers (keep all user-supplied text escaped) ---
@@ -908,7 +989,10 @@ func main() {
 		untested = untestedImpact(rep.BlastRadius, corpus)
 	}
 
-	md := renderMarkdown(rep, changedNames, untested)
+	// Will this verdict actually fail the pipeline? (Drives the ⛔/⚠️ badge.)
+	blocking := *gateUntested >= 0 && len(untested) > *gateUntested
+	md := renderMarkdown(rep, changedNames, untested, blocking)
+	md += hubNotes(g, changed, hubFanInThreshold())
 
 	// Governance: map the project's CODEOWNERS onto the blast radius — owners of
 	// impacted-but-unchanged files that GitLab's diff-only Code Owners would miss.

@@ -64,7 +64,7 @@ func TestResolveChanged(t *testing.T) {
 }
 
 func TestRenderMarkdownEmptyBlastRadius(t *testing.T) {
-	md := renderMarkdown(report{ImpactedCount: 0}, []string{"ApplyDiscount"}, nil)
+	md := renderMarkdown(report{ImpactedCount: 0}, []string{"ApplyDiscount"}, nil, false)
 	if !strings.Contains(md, "Safe to merge") {
 		t.Fatalf("empty radius should be called out, got:\n%s", md)
 	}
@@ -85,11 +85,11 @@ func TestRenderMarkdownDeepChainFlagsCap(t *testing.T) {
 			{ID: "999", FilePath: "calc/order.go", Distance: 5}, // no name -> labeled unresolved
 		},
 	}
-	md := renderMarkdown(r, []string{"applyRate"}, nil)
+	md := renderMarkdown(r, []string{"applyRate"}, nil, false)
 	if !strings.Contains(md, "could affect **2** other function(s)") {
 		t.Fatalf("missing impact count, got:\n%s", md)
 	}
-	if !strings.Contains(md, "past Orbit's 3-hop query limit") {
+	if !strings.Contains(md, "past Orbit's 3-call query limit") {
 		t.Fatalf("depth>3 should flag the 3-hop cap (the moat), got:\n%s", md)
 	}
 	if !strings.Contains(md, "| `CalculateTax` | calc/tax.go | 1 |") {
@@ -110,7 +110,7 @@ func TestRenderMarkdownEscapesTableInjection(t *testing.T) {
 			{Name: "evil | col | inj\n## heading `x`", FilePath: "a|b\nc.go", Distance: 1},
 		},
 	}
-	md := renderMarkdown(r, []string{"changed | name"}, nil)
+	md := renderMarkdown(r, []string{"changed | name"}, nil, false)
 	if strings.Contains(md, "evil | col") {
 		t.Fatalf("raw pipe leaked into table cell (injection), got:\n%s", md)
 	}
@@ -223,15 +223,19 @@ func TestQueryLimitRespectsEnvAndBuildersHonorIt(t *testing.T) {
 
 func TestRenderMarkdownShowsUntestedSection(t *testing.T) {
 	r := report{ImpactedCount: 1, MaxDepth: 2, BlastRadius: []impacted{{Name: "TotalWithTax", FilePath: "calc/order.go", Distance: 1}}}
-	md := renderMarkdown(r, []string{"CalculateTax"}, []impacted{{Name: "TotalWithTax", FilePath: "calc/order.go", Distance: 1}})
-	if !strings.Contains(md, "reaches untested code") {
-		t.Fatalf("untested headline missing:\n%s", md)
+	md := renderMarkdown(r, []string{"CalculateTax"}, []impacted{{Name: "TotalWithTax", FilePath: "calc/order.go", Distance: 1}}, false)
+	if !strings.Contains(md, "Heads-up (won't block your merge)") {
+		t.Fatalf("non-blocking untested verdict should show the Heads-up badge:\n%s", md)
 	}
-	if !strings.Contains(md, "Untested functions this could break") {
+	if !strings.Contains(md, "Functions with no test that this could break") {
 		t.Fatalf("untested list missing:\n%s", md)
 	}
 	if !strings.Contains(md, "`TotalWithTax`") {
 		t.Fatalf("untested symbol not listed:\n%s", md)
+	}
+	// blocking=true must flip the badge to Blocked.
+	if blk := renderMarkdown(r, []string{"CalculateTax"}, []impacted{{Name: "TotalWithTax", Distance: 1}}, true); !strings.Contains(blk, "⛔ Blocked") {
+		t.Fatalf("blocking verdict should show the Blocked badge:\n%s", blk)
 	}
 }
 
@@ -254,7 +258,8 @@ func TestBuildMermaid(t *testing.T) {
 	untested := []impacted{{ID: "L", Name: "levyBase", Distance: 2}}
 	out := buildMermaid(g, []string{"C"}, rep, untested)
 
-	for _, want := range []string{"```mermaid", "graph TD", "[\"standardRate\"]", "[\"Rate\"]", "[\"levyBase\"]"} {
+	// changed = circle (( )), untested = diamond { }, tested/other = rect [ ]
+	for _, want := range []string{"```mermaid", "graph TD", "((\"standardRate\"))", "[\"Rate\"]", "{\"levyBase\"}"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("mermaid missing %q:\n%s", want, out)
 		}
@@ -339,7 +344,7 @@ func TestRecipeComparison(t *testing.T) {
 
 func TestRenderMarkdownShallowDoesNotClaimCap(t *testing.T) {
 	r := report{ImpactedCount: 1, MaxDepth: 2, BlastRadius: []impacted{{Name: "X", Distance: 2}}}
-	md := renderMarkdown(r, nil, nil)
+	md := renderMarkdown(r, nil, nil, false)
 	if strings.Contains(md, "3-hop") {
 		t.Fatalf("depth<=3 must NOT claim to beat the 3-hop cap, got:\n%s", md)
 	}
@@ -435,7 +440,7 @@ func TestRenderMarkdownShowsMinimumTestSet(t *testing.T) {
 		UntestedCount:  4,
 		MinimumTestSet: []cutNode{{ID: "M", Name: "CalculateTax", FilePath: "calc/tax.rb"}},
 	}
-	md := renderMarkdown(r, []string{"standardRate"}, []impacted{{Name: "CalculateTax", Distance: 1}})
+	md := renderMarkdown(r, []string{"standardRate"}, []impacted{{Name: "CalculateTax", Distance: 1}}, false)
 	if !strings.Contains(md, "Fastest fix") || !strings.Contains(md, "`CalculateTax`") {
 		t.Errorf("expected the plain-language fix headline, got:\n%s", md)
 	}
@@ -446,7 +451,7 @@ func TestRenderMarkdownShowsMinimumTestSet(t *testing.T) {
 		t.Errorf("expected the provably-minimal attribution in details, got:\n%s", md)
 	}
 	// when there is no cut, the section must be absent.
-	if strings.Contains(renderMarkdown(report{ImpactedCount: 1, BlastRadius: []impacted{{Name: "X"}}}, nil, nil), "Smallest set of tests") {
+	if strings.Contains(renderMarkdown(report{ImpactedCount: 1, BlastRadius: []impacted{{Name: "X"}}}, nil, nil, false), "Smallest set of tests") {
 		t.Errorf("min-test-set section must not render when empty")
 	}
 }
@@ -462,7 +467,7 @@ func TestRenderMarkdownShowsRiskAttribution(t *testing.T) {
 		},
 		RiskAttributionExact: true,
 	}
-	md := renderMarkdown(r, []string{"parseConfig", "loadEnv"}, []impacted{{Name: "startServer", Distance: 1}})
+	md := renderMarkdown(r, []string{"parseConfig", "loadEnv"}, []impacted{{Name: "startServer", Distance: 1}}, false)
 	if !strings.Contains(md, "Who owns the gap") {
 		t.Fatalf("risk-attribution section missing:\n%s", md)
 	}
@@ -479,14 +484,14 @@ func TestRenderMarkdownShowsRiskAttribution(t *testing.T) {
 	// A single changed symbol owns 100% trivially — that's noise, so it must be hidden.
 	one := report{ImpactedCount: 1, BlastRadius: []impacted{{Name: "X"}},
 		RiskAttribution: []riskShare{{ID: "P", Name: "p", Shapley: 1, SharePct: 100}}}
-	if strings.Contains(renderMarkdown(one, nil, nil), "Who owns the gap") {
+	if strings.Contains(renderMarkdown(one, nil, nil, false), "Who owns the gap") {
 		t.Errorf("attribution must be hidden for a single changed symbol")
 	}
 
 	// Sampled (large changed set) attribution must be flagged honestly.
 	r.RiskAttributionExact = false
-	if !strings.Contains(renderMarkdown(r, nil, []impacted{{Name: "startServer"}}), "approximate") {
-		t.Errorf("sampled attribution must be labeled approximate:\n%s", renderMarkdown(r, nil, []impacted{{Name: "startServer"}}))
+	if !strings.Contains(renderMarkdown(r, nil, []impacted{{Name: "startServer"}}, false), "approximate") {
+		t.Errorf("sampled attribution must be labeled approximate:\n%s", renderMarkdown(r, nil, []impacted{{Name: "startServer"}}, false))
 	}
 }
 
@@ -518,5 +523,22 @@ func TestBuildMermaidDeHairballsLargeRadius(t *testing.T) {
 	}
 	if !strings.Contains(md, "\"changed\"") || !strings.Contains(md, "\"n0\"") {
 		t.Fatalf("essential nodes (change + untested) must remain:\n%s", md)
+	}
+}
+
+func TestHubNotes(t *testing.T) {
+	// `hub` is called directly by 3 functions; threshold 3 flags it, 4 doesn't.
+	g := graph{
+		Nodes: []gNode{{ID: "H", Name: "hub"}, {ID: "a"}, {ID: "b"}, {ID: "c"}},
+		Edges: []gEdge{{Type: "CALLS", From: "a", To: "H"}, {Type: "CALLS", From: "b", To: "H"}, {Type: "CALLS", From: "c", To: "H"}},
+	}
+	if s := hubNotes(g, []string{"H"}, 3); !strings.Contains(s, "Hub change") || !strings.Contains(s, "`hub`") || !strings.Contains(s, "**3**") {
+		t.Fatalf("fan-in 3 at threshold 3 should flag the hub, got:\n%s", s)
+	}
+	if s := hubNotes(g, []string{"H"}, 4); s != "" {
+		t.Fatalf("fan-in 3 below threshold 4 must not flag, got:\n%s", s)
+	}
+	if s := hubNotes(g, []string{"H"}, 0); s != "" {
+		t.Fatalf("threshold 0 disables the alert, got:\n%s", s)
 	}
 }
