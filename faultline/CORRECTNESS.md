@@ -81,6 +81,10 @@ Markdown, every run.
   cyclic and self-referential graphs terminate with correct shortest distances.
 - **Saturating distance.** Depth increments use `saturating_add` — no overflow even
   on pathological graphs.
+- **Deterministic visualization.** The interactive graph's force-directed layout is
+  computed in Go with a fixed seed, a fixed iteration count, and a canonical (sorted)
+  node/edge order, so the same change yields a byte-identical HTML page — the diagram
+  is reproducible too, not just the verdict text.
 
 ## Complexity
 

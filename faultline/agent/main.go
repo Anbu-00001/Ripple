@@ -687,6 +687,7 @@ func main() {
 	mrProject := flag.Int("mr-project-id", 0, "project ID for --post-mr (defaults to --project-id)")
 	repoRoot := flag.String("repo-root", "", "repo checkout to scan for test coverage of impacted symbols (untested blast radius)")
 	gateUntested := flag.Int("gate-untested", -1, "if >=0, exit non-zero when untested-impacted count exceeds N (gates the MR)")
+	htmlOut := flag.String("html-out", "", "optional path to write a self-contained interactive blast-radius graph (HTML)")
 	flag.Parse()
 
 	if *pid == 0 || *enginePath == "" {
@@ -797,6 +798,15 @@ func main() {
 	}
 	if truncated {
 		md += fmt.Sprintf("\n> ⚠️ **Note:** an Orbit query hit the %d-row limit, so the analyzed graph may be partial. Set `FAULTLINE_QUERY_LIMIT` higher for complete results.\n", limit)
+	}
+	if *htmlOut != "" {
+		if html := buildInteractiveHTML(g, changed, rep, untested); html != "" {
+			if err := os.WriteFile(*htmlOut, []byte(html), 0o644); err != nil {
+				fmt.Fprintf(os.Stderr, "faultline-agent: could not write %s: %v\n", *htmlOut, err)
+			} else {
+				md += "\n🕸️ **Interactive blast-radius graph:** open the **Faultline interactive graph** artifact on this pipeline — zoom, drag, and hover any node for its file and hop-distance.\n"
+			}
+		}
 	}
 
 	switch {
