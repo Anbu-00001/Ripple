@@ -68,6 +68,29 @@ compares the engine's values, over random graphs, to the textbook permutation-av
 and that the shares sum to the true untested total. Sorted inputs make the ranking
 reproducible.
 
+## The language-agnostic guarantee (Go, Python, Ruby, …)
+
+Faultline closes the graph over **opaque definition IDs**. The engine never reads a
+node's `file_path` or `definition_type` when computing the closure, the minimum cut,
+or the Shapley split — those fields are carried through for display only. So the
+verdict is identical no matter which language the symbols come from, and a single
+merge request that spans several languages yields one closure over all of them.
+
+**Invariant:** `analyze`/`min_test_cut`/`shapley_risk` depend only on the *(id,
+edge)* topology, never on file type.
+
+**How it's enforced:** `closure_is_language_blind_across_go_python_ruby`
+(`engine/src/main.rs`) builds a mixed Go/Python/Ruby graph and asserts the impacted
+*(id, distance)* set is byte-identical when every file extension is swapped to a
+single language. On the agent side — where the *one* language-aware surface lives,
+test-file detection — `TestPolyglotEndToEndThroughEngine` (`agent/polyglot_test.go`)
+runs the real engine on a mixed graph and asserts each language's test convention
+(`_test.go` / `test_*.py` / `*_spec.rb`) is recognized and the verdict spans all
+three. Orbit's emission of `CALLS`/`EXTENDS` for each language was verified live, not
+assumed (see `demo/polyglot/`). Faultline does **not** synthesize cross-language call
+edges — calls that cross a language boundary (e.g. an HTTP RPC) are not `CALLS` edges
+and are out of scope, by design.
+
 ## Determinism guarantees
 
 The verdict is a **pure function** of `(graph, changed set)` — there is no model,

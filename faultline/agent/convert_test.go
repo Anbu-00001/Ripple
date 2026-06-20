@@ -155,22 +155,39 @@ func TestUntestedImpact(t *testing.T) {
 }
 
 func TestIsTestFile(t *testing.T) {
-	yes := []string{
-		"calc/tax_test.go", "x/test_foo.py", "a/foo.test.ts", "b/Foo.spec.js",
-		"m/BarTest.java", "pkg/__tests__/x.js",
-		// broadened coverage (audit M2)
-		"svc/user_spec.rb", "lib/calc_test.exs", "app/UserTest.php",
-		"core/Foo.spec.mjs", "ios/LoginTests.swift", "py/api_tests.py",
+	// The test-file detector is the ONLY language-aware surface in the agent (the
+	// engine is language-agnostic), so it must recognize each ecosystem's idiom
+	// AND not over-match ordinary source files — a false positive would count a
+	// non-test file as coverage and silently hide a real untested blast radius.
+	cases := []struct {
+		lang string
+		yes  []string
+		no   []string
+	}{
+		{"Go", []string{"calc/tax_test.go"}, []string{"calc/tax.go", "main.go"}},
+		{"Python", []string{"x/test_foo.py", "py/api_tests.py", "pkg/foo_test.py", "tests/foo.py"},
+			[]string{"py/foo.py", "py/contest.py"}}, // "contest" must not trip the test_ prefix
+		{"Ruby", []string{"svc/user_spec.rb", "models/user_test.rb", "spec/rails_helper.rb", "test/models/user.rb"},
+			[]string{"app/models/user.rb", "lib/spec.rb"}}, // a source file named spec.rb is not a test
+		{"JS/TS", []string{"a/foo.test.ts", "b/Foo.spec.js", "core/Foo.spec.mjs", "pkg/__tests__/x.js"},
+			[]string{"src/foo.ts", "src/app.js"}},
+		{"Java/Kotlin", []string{"m/BarTest.java", "m/BarTests.java", "m/FooIT.java", "k/BarTest.kt"},
+			[]string{"m/Bar.java", "k/Bar.kt"}},
+		{"other", []string{"app/UserTest.php", "lib/calc_test.exs", "ios/LoginTests.swift", "r/calc_test.rs", "d/calc_test.dart", "cs/FooTests.cs"},
+			[]string{"app/User.php", "r/calc.rs"}},
+		// Path precision: substrings that merely contain "test"/"spec" must NOT match.
+		{"precision", nil, []string{"internal/latest/cache.go", "api/apispec/handler.go", "src/contestant/x.go"}},
 	}
-	no := []string{"calc/tax.go", "main.go", "README.md", "src/foo.ts"}
-	for _, f := range yes {
-		if !isTestFile(f) {
-			t.Fatalf("%q should be a test file", f)
+	for _, c := range cases {
+		for _, f := range c.yes {
+			if !isTestFile(f) {
+				t.Errorf("[%s] %q should be detected as a test file", c.lang, f)
+			}
 		}
-	}
-	for _, f := range no {
-		if isTestFile(f) {
-			t.Fatalf("%q should NOT be a test file", f)
+		for _, f := range c.no {
+			if isTestFile(f) {
+				t.Errorf("[%s] %q must NOT be a test file (a false positive hides coverage gaps)", c.lang, f)
+			}
 		}
 	}
 	// configurable: a project-specific convention via FAULTLINE_TEST_PATTERNS.

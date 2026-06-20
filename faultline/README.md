@@ -4,7 +4,7 @@
 
 > Orbit can *describe* a change's blast radius. **Faultline makes Orbit *enforce* it** — Code Owners for the blast radius, not the diff.
 
-**56 deterministic tests** · Rust engine: 28 example + **3 property tests proving the closure is complete, the minimum test set is provably minimal, and the Shapley risk split is exact** · Go agent: 25 · runs as a GitLab CI gate · [why it's correct →](CORRECTNESS.md)
+**56 deterministic tests** · Rust engine: 28 example + **3 property tests proving the closure is complete, the minimum test set is provably minimal, and the Shapley risk split is exact** · Go agent: 25 · **polyglot (Go + Python + Ruby), verified end-to-end** · runs as a GitLab CI gate · [why it's correct →](CORRECTNESS.md)
 
 Faultline computes the **full transitive set of callers** ("blast radius") of the symbols changed in a merge request, intersects it with the impacted code that **lacks test coverage**, and **fails the pipeline (blocks the merge)** when an untested blast radius is found. A green-looking one-line helper change that silently reaches deep, untested code becomes a *blocked* MR with an explained verdict.
 
@@ -51,6 +51,17 @@ We ran Faultline against real, reproduced regressions from [BugsInPy](https://gi
 
 The batch reuses the *exact* `faultline-engine` binary and the same coverage heuristic as the live gate — only the graph source differs (a conservative static analyzer offline vs. Orbit in production), so the numbers are a **lower bound**. Full methodology, honest caveats, verified call chains, and a reproducible script: **[empirical/RESULTS.md](empirical/RESULTS.md)**.
 
+## Polyglot — Go, Python & Ruby (one verdict, many languages)
+
+Faultline is **language-agnostic by construction**, not by per-language plumbing. The engine closes the graph over **opaque definition IDs** — it never reads a file type — and Orbit emits `CALLS`/`EXTENDS` edges for every language it indexes. The *only* language-aware code in Faultline is which filenames count as tests. So a single merge request that bumps a base rate in a **Go**, a **Python**, and a **Ruby** (GitLab's own Rails stack) service at once produces **one verdict whose blast radius and untested gap span all three languages together**.
+
+This is proven, not asserted:
+
+- **Engine is language-blind** — `closure_is_language_blind_across_go_python_ruby` builds a mixed Go/Python/Ruby graph and asserts the closure is byte-identical when every file extension is swapped (file type cannot change the result).
+- **The agent's only language-aware surface is verified end-to-end** — `TestPolyglotEndToEndThroughEngine` runs the real `faultline-engine` binary on a mixed graph, recognizes each language's test convention (`_test.go` / `test_*.py` / `*_spec.rb`), and asserts the verdict names files in all three.
+- **Orbit's per-language edges were verified live**, not assumed — a public probe project returned full `CALLS` (Python / Go / Ruby) **and** `EXTENDS` inheritance for all three.
+- **No overclaim:** Faultline does *not* invent cross-language call edges (a Go→Ruby HTTP call is not a `CALLS` edge, and we don't pretend it is). The runnable three-language example and reproduction steps: **[demo/polyglot/](demo/polyglot/)**.
+
 ## Architecture
 
 | Component | Role | Tests |
@@ -88,8 +99,8 @@ The job pulls the call graph from Orbit for the MR's changed files, computes the
 ## Run the tests
 
 ```console
-$ (cd engine && cargo test)   # 31 passed (incl. 3 property tests) — closure, min-cut, Shapley
-$ (cd agent  && go test ./...) # 25 passed — normalize, render, gate, mermaid, interactive graph, query contract, config
+$ (cd engine && cargo test)   # 31 passed (incl. 3 property tests + language-blind closure) — closure, min-cut, Shapley
+$ (cd agent  && go test ./...) # 25 passed — normalize, render, gate, mermaid, interactive graph, polyglot E2E, config
 ```
 
 ## Honesty boundaries (by design)
