@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Faultline — change-impact graph</title>
+<style>
+  /* Okabe-Ito colorblind-safe palette (distinct by luminance, not just hue) */
+  :root{--bg:#0d1117;--fg:#e6edf3;--muted:#8b949e;--changed:#0072B2;--untested:#D55E00;--impacted:#009E73;--edge:#30363d;}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;}
+  #wrap{display:flex;flex-direction:column;height:100%;}
+  header{padding:10px 14px;border-bottom:1px solid var(--edge);}
+  header h1{font-size:15px;margin:0;font-weight:600;}
+  header p{margin:4px 0 0;font-size:12px;color:var(--muted);}
+  .legend{display:flex;gap:14px;margin-top:6px;font-size:12px;flex-wrap:wrap;}
+  .legend span{display:inline-flex;align-items:center;gap:5px;}
+  .dot{width:10px;height:10px;border-radius:50%;display:inline-block;}
+  #svg{flex:1;width:100%;cursor:grab;touch-action:none;}
+  #svg.drag{cursor:grabbing;}
+  /* Non-color redundancy so role is legible without relying on hue: bold ring =
+     changed, dashed ring = untested, thin ring = tested. */
+  .node circle{stroke:#0d1117;stroke-width:1.5px;cursor:pointer;}
+  .node.changed circle{fill:var(--changed);stroke:#fff;stroke-width:3px;}
+  .node.untested circle{fill:var(--untested);stroke:#fff;stroke-width:2px;stroke-dasharray:3 2;}
+  .node.impacted circle{fill:var(--impacted);}
+  .node text{fill:var(--fg);font-size:11px;pointer-events:none;paint-order:stroke;stroke:#0d1117;stroke-width:3px;}
+  line.edge{stroke:var(--edge);stroke-width:1.5px;}
+  #tip{position:fixed;pointer-events:none;background:#161b22;border:1px solid var(--edge);border-radius:6px;padding:6px 9px;font-size:12px;display:none;max-width:340px;z-index:9;}
+  #tip .m{color:var(--muted);margin-top:2px;}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <header>
+    <h1>🪨 Faultline — change-impact graph</h1>
+    <p id="sub"></p>
+    <div class="legend">
+      <span><i class="dot" style="background:var(--changed);border:2px solid #fff"></i>changed (bold ring)</span>
+      <span><i class="dot" style="background:var(--untested);border:2px dashed #fff"></i>no test (dashed ring)</span>
+      <span><i class="dot" style="background:var(--impacted)"></i>has a test</span>
+      <span class="m">scroll = zoom · drag background = pan · drag node = move · hover = details</span>
+    </div>
+  </header>
+  <svg id="svg" viewBox="0 0 960 640" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Faultline change-impact graph: changed code (bold ring), code with no test (dashed ring), and code that has a test">
+    <defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="14" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#30363d"></path>
+      </marker>
+    </defs>
+    <g id="view"></g>
+  </svg>
+</div>
+<div id="tip"></div>
+<script id="faultline-data" type="application/json">{"nodes":[{"id":"1095994329709459372","label":"TotalWithTax","file":"calc/order.go","role":"impacted","dist":1,"x":907.85,"y":600},{"id":"1743778488924370228","label":"Rate","file":"calc/pipeline.go","role":"untested","dist":1,"x":220.83,"y":139.32},{"id":"3053091966367130729","label":"CalculateTax","file":"calc/tax.go","role":"changed","dist":0,"x":616.32,"y":600},{"id":"5391741732485557283","label":"standardRate","file":"calc/tax.go","role":"changed","dist":0,"x":355.18,"y":394.81},{"id":"5504450099421781048","label":"ApplyDiscount","file":"calc/tax.go","role":"changed","dist":0,"x":40,"y":600},{"id":"6597747058446617937","label":"applyRate","file":"calc/tax.go","role":"changed","dist":0,"x":411.1,"y":600},{"id":"6899274183224139037","label":"levyBase","file":"calc/pipeline.go","role":"untested","dist":2,"x":453.95,"y":40},{"id":"7764291206871239307","label":"netLevy","file":"calc/pipeline.go","role":"untested","dist":4,"x":690.12,"y":40},{"id":"8298841752279980299","label":"InvoiceTotal","file":"calc/pipeline.go","role":"untested","dist":5,"x":920,"y":40},{"id":"8373823532256895439","label":"grossLevy","file":"calc/pipeline.go","role":"untested","dist":3,"x":771.31,"y":40}],"edges":[{"from":"1095994329709459372","to":"3053091966367130729"},{"from":"1743778488924370228","to":"5391741732485557283"},{"from":"3053091966367130729","to":"5391741732485557283"},{"from":"3053091966367130729","to":"6597747058446617937"},{"from":"6899274183224139037","to":"1743778488924370228"},{"from":"7764291206871239307","to":"8373823532256895439"},{"from":"8298841752279980299","to":"7764291206871239307"},{"from":"8373823532256895439","to":"6899274183224139037"}]}</script>
+<script>
+(function(){
+  "use strict";
+  var data = JSON.parse(document.getElementById("faultline-data").textContent);
+  var NS = "http://www.w3.org/2000/svg";
+  var svg = document.getElementById("svg");
+  var view = document.getElementById("view");
+  var tip = document.getElementById("tip");
+  var byId = {};
+  data.nodes.forEach(function(n){ byId[n.id] = n; });
+
+  var nUntested = data.nodes.filter(function(n){ return n.role === "untested"; }).length;
+  document.getElementById("sub").textContent =
+    data.nodes.length + " definitions · " + data.edges.length + " edges · " + nUntested + " untested (red)";
+
+  data.edges.forEach(function(e){
+    var a = byId[e.from], b = byId[e.to];
+    if(!a || !b){ return; }
+    var ln = document.createElementNS(NS, "line");
+    ln.setAttribute("class", "edge");
+    ln.setAttribute("x1", a.x); ln.setAttribute("y1", a.y);
+    ln.setAttribute("x2", b.x); ln.setAttribute("y2", b.y);
+    ln.setAttribute("marker-end", "url(#arrow)");
+    ln.dataset.from = e.from; ln.dataset.to = e.to;
+    view.appendChild(ln);
+  });
+
+  data.nodes.forEach(function(n){
+    var g = document.createElementNS(NS, "g");
+    g.setAttribute("class", "node " + n.role);
+    g.setAttribute("transform", "translate(" + n.x + "," + n.y + ")");
+    var c = document.createElementNS(NS, "circle");
+    c.setAttribute("r", n.role === "changed" ? 9 : 6);
+    g.appendChild(c);
+    var t = document.createElementNS(NS, "text");
+    t.setAttribute("x", 10); t.setAttribute("y", 4);
+    t.textContent = n.label;
+    g.appendChild(t);
+    g.dataset.id = n.id;
+    g.addEventListener("mousemove", function(ev){ showTip(ev, n); });
+    g.addEventListener("mouseleave", function(){ tip.style.display = "none"; });
+    g.addEventListener("mousedown", function(ev){ startNodeDrag(ev, n, g); });
+    view.appendChild(g);
+  });
+
+  function showTip(ev, n){
+    var role = n.role === "untested" ? "untested impacted" : (n.role === "changed" ? "changed" : "impacted (tested)");
+    tip.innerHTML = "<b></b><div class='m'></div>";
+    tip.querySelector("b").textContent = n.label;
+    tip.querySelector(".m").textContent = (n.file || "—") + "  ·  " + role + (n.dist ? ("  ·  " + n.dist + " hops") : "");
+    tip.style.display = "block";
+    tip.style.left = (ev.clientX + 12) + "px";
+    tip.style.top = (ev.clientY + 12) + "px";
+  }
+
+  var tx = 0, ty = 0, scale = 1;
+  function apply(){ view.setAttribute("transform", "translate(" + tx + "," + ty + ") scale(" + scale + ")"); }
+  svg.addEventListener("wheel", function(ev){
+    ev.preventDefault();
+    var f = ev.deltaY < 0 ? 1.1 : 1 / 1.1;
+    scale = Math.max(0.2, Math.min(5, scale * f));
+    apply();
+  }, { passive: false });
+
+  var panning = false, px = 0, py = 0;
+  svg.addEventListener("mousedown", function(ev){
+    if(ev.target.closest(".node")){ return; }
+    panning = true; px = ev.clientX - tx; py = ev.clientY - ty; svg.classList.add("drag");
+  });
+  window.addEventListener("mousemove", function(ev){
+    if(panning){ tx = ev.clientX - px; ty = ev.clientY - py; apply(); }
+  });
+  window.addEventListener("mouseup", function(){ panning = false; svg.classList.remove("drag"); });
+
+  var dragN = null, dragG = null;
+  function startNodeDrag(ev, n, g){ ev.stopPropagation(); dragN = n; dragG = g; window.addEventListener("mousemove", onNodeDrag); window.addEventListener("mouseup", endNodeDrag); }
+  function svgPoint(ev){
+    var pt = svg.createSVGPoint(); pt.x = ev.clientX; pt.y = ev.clientY;
+    return pt.matrixTransform(view.getScreenCTM().inverse());
+  }
+  function onNodeDrag(ev){
+    if(!dragN){ return; }
+    var p = svgPoint(ev); dragN.x = p.x; dragN.y = p.y;
+    dragG.setAttribute("transform", "translate(" + p.x + "," + p.y + ")");
+    view.querySelectorAll("line.edge").forEach(function(ln){
+      if(ln.dataset.from === dragN.id){ ln.setAttribute("x1", p.x); ln.setAttribute("y1", p.y); }
+      if(ln.dataset.to === dragN.id){ ln.setAttribute("x2", p.x); ln.setAttribute("y2", p.y); }
+    });
+  }
+  function endNodeDrag(){ dragN = null; dragG = null; window.removeEventListener("mousemove", onNodeDrag); window.removeEventListener("mouseup", endNodeDrag); }
+})();
+</script>
+</body>
+</html>
