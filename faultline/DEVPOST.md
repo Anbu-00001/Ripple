@@ -16,20 +16,20 @@ A deterministic GitLab CI merge gate, built on **GitLab Orbit** (the code Knowle
 
 **How does it fix it?** Faultline asks Orbit for the call graph, then computes the **complete reverse-transitive closure** of the changed symbols — every function that could be affected, at any depth — intersects it with the code that has **no test**, and fails the pipeline. It doesn't just flag the gap; it **prescribes the smallest fix**: a provably-minimal set of test points, ranked by leverage, attributed fairly across the changed symbols.
 
-**What changes for the developer?** Instead of a green MR that hides a deep, untested ripple, they get a blocked MR that says, in plain words: *"Changing `_partially_consume_prefix` could affect 6 functions up to 5 calls away — past Orbit's 3-hop limit. 5 have no tests. Fastest fix: add 1 test at `parse_tokens` to cover them all."* The graph theory is tucked into an expandable section; the owners of impacted-but-unchanged files are pulled into the conversation.
+**What changes for the developer?** Instead of a green MR that hides a deep, untested ripple, they get a blocked MR that says, in plain words: *"Changing `_partially_consume_prefix` could affect 6 functions up to 5 calls away — deeper than any single Orbit query returns. 5 have no tests. Fastest fix: add 1 test at `parse_tokens` to cover them all."* The graph theory is tucked into an expandable section; the owners of impacted-but-unchanged files are pulled into the conversation.
 
 ---
 
 ## Why it's a *new* capability for Orbit (the innovation)
 
-Orbit's query DSL can traverse the `CALLS` edge — but only up to **`max_hops: 3`**, with **no transitive-closure / variable-depth operator**. You can verify the cap against the live API:
+Orbit's query DSL traverses the `CALLS` edge with a **depth bound** (`max_hops: 3`, to keep interactive queries fast) and **no unbounded transitive-closure operator**. That bound is right for a live query; a merge gate needs the complete set. You can confirm the bound against the live API:
 
 ```
 max_hops: 3 → HTTP 200.  max_hops: 4 → {"code":"compile_error",
   "message":"schema violation: 4 is greater than the maximum of 3 ..."}
 ```
 
-So Orbit can *describe* a path; it **cannot hand you the complete transitive caller set at arbitrary depth** — which is exactly what governance needs. Faultline adds that: a deterministic engine that *closes the graph Orbit exposes*, over `CALLS` **and** `EXTENDS` (so a base-type change ripples through its whole subtype chain).
+So one Orbit query gives bounded reach; the **complete transitive caller set at arbitrary depth** has to be *composed* — which is exactly what a merge gate needs. Faultline does that **offline, in CI**: a deterministic engine that closes the one-hop graph Orbit exposes, over `CALLS` **and** `EXTENDS` (so a base-type change ripples through its whole subtype chain) — completing Orbit's "full blast radius" promise for the gate, where latency isn't the constraint.
 
 ---
 

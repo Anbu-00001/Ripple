@@ -163,8 +163,8 @@ func TestRenderMarkdownDeepChainFlagsCap(t *testing.T) {
 	if !strings.Contains(md, "could affect **2** other function(s)") {
 		t.Fatalf("missing impact count, got:\n%s", md)
 	}
-	if !strings.Contains(md, "past Orbit's 3-call query limit") {
-		t.Fatalf("depth>3 should flag the 3-hop cap (the moat), got:\n%s", md)
+	if !strings.Contains(md, "deeper than any single Orbit query returns") {
+		t.Fatalf("depth>3 should note impact is deeper than one bounded Orbit query, got:\n%s", md)
 	}
 	if !strings.Contains(md, "| `CalculateTax` | calc/tax.go | 1 |") {
 		t.Fatalf("table row malformed, got:\n%s", md)

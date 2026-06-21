@@ -127,10 +127,11 @@ type report struct {
 	CoverageRanking       []coverageRank `json:"coverage_ranking"`
 }
 
-// orbitMaxHops is GitLab Orbit's hard query-DSL cap (max_hops ≤ 3). It is the moat:
-// any single Orbit query reaches at most this depth, so impact ≥ orbitMaxHops+1 hops
-// away is invisible to the API and only Faultline's client-side closure finds it.
-// One named home so the boundary can't drift across call sites (audit M3).
+// orbitMaxHops is the depth bound Orbit places on a single traversal query
+// (max_hops ≤ 3) to keep interactive graph queries fast. Faultline respects that
+// bound: it fetches one-hop edges and composes the full transitive closure offline
+// in CI, so impact ≥ orbitMaxHops+1 hops away — which no single bounded query
+// returns — is still found. One named home so the boundary can't drift (audit M3).
 const orbitMaxHops = 3
 
 // defaultQueryLimit caps rows per Orbit query. This DSL has no documented cursor
@@ -591,13 +592,13 @@ func buildMermaid(g graph, changed []string, r report, untested []impacted) stri
 	return b.String()
 }
 
-// recipeComparison renders Faultline's headline differentiator. Orbit's query DSL
-// is hard-capped at 3 hops (max_hops <= 3), so even an optimally-written native
-// reverse-`CALLS` query can only reach impacted definitions within 3 hops of the
-// change. Faultline's engine computes the full transitive closure. This block
-// quantifies the gap and lists the impacted definitions that lie beyond ANY
-// single Orbit query (>= 4 hops). Returns "" when nothing is beyond reach, so we
-// never overclaim on a shallow change. Pure (no I/O).
+// recipeComparison renders Faultline's headline differentiator, respectfully.
+// Orbit bounds a single traversal query's depth (max_hops <= 3) to keep interactive
+// queries fast, so one native reverse-`CALLS` query returns only the definitions
+// within 3 hops. Faultline composes those one-hop edges into the full transitive
+// closure offline in CI. This block quantifies the gap and lists the impacted
+// definitions beyond a single bounded query (>= 4 hops). Returns "" when nothing is
+// beyond reach, so we never overclaim on a shallow change. Pure (no I/O).
 func recipeComparison(r report) string {
 	if r.ImpactedCount == 0 {
 		return ""
@@ -615,9 +616,9 @@ func recipeComparison(r report) string {
 		return "" // entirely within Orbit's reach — no moat to claim
 	}
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("\n**🔭 Orbit %d-hop query vs Faultline closure**\n", orbitMaxHops))
+	b.WriteString("\n**🔭 One Orbit query vs Faultline's full closure**\n")
 	b.WriteString(fmt.Sprintf(
-		"Orbit's query DSL is hard-capped at %d hops (`max_hops` ≤ %d). A native reverse-`CALLS` query therefore reaches at most **%d of %d** impacted definition(s); the other **%d** sit ≥ %d hops from the change and are invisible to *any* single Orbit query. Faultline computes the full closure and surfaces them:\n",
+		"Orbit bounds a single traversal query to %d hops (`max_hops` ≤ %d) to keep interactive graph queries fast. One reverse-`CALLS` query therefore returns at most **%d of %d** impacted definition(s); the other **%d** sit ≥ %d hops away — beyond what one bounded query returns. Faultline composes those one-hop edges into the full closure offline, in CI, and surfaces them:\n",
 		orbitMaxHops, orbitMaxHops, within, r.ImpactedCount, len(beyond), orbitMaxHops+1))
 	for _, it := range beyond {
 		name := it.Name
@@ -667,7 +668,7 @@ func renderMarkdown(r report, changedNames []string, untested []impacted, blocki
 	// Depth note (independent of test coverage): impact deeper than Orbit's query cap.
 	depthNote := fmt.Sprintf("up to **%d** call(s) away", r.MaxDepth)
 	if r.MaxDepth > orbitMaxHops {
-		depthNote = fmt.Sprintf("up to **%d** call(s) away, past Orbit's %d-call query limit", r.MaxDepth, orbitMaxHops)
+		depthNote = fmt.Sprintf("up to **%d** call(s) away — deeper than any single Orbit query returns", r.MaxDepth)
 	}
 
 	if len(untested) == 0 {
