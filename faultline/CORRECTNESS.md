@@ -129,6 +129,19 @@ Markdown, every run.
   computed in Go with a fixed seed, a fixed iteration count, and a canonical (sorted)
   node/edge order, so the same change yields a byte-identical HTML page — the diagram
   is reproducible too, not just the verdict text.
+- **Deterministic Code Quality report.** The native GitLab Code Quality artifact is a
+  faithful pass-through of the engine's findings: one entry per untested impacted
+  function, sorted by `(path, begin line, fingerprint)`, with a **stable per-symbol
+  fingerprint** (hash of the check name + Orbit Definition id) so an unchanged gap is
+  the *same* finding across runs rather than a new nag. Severity is derived from the
+  algorithm — a recommended test point (a member of the provably-minimal set) outranks
+  a merely-impacted node, and the loud severities are reserved for when gating is on —
+  never a guessed threshold. The schema (single JSON array; `description`, `check_name`,
+  `fingerprint`, `severity`, `location.path` relative + `location.lines.begin`) is the
+  format GitLab natively ingests, and it is **advisory**: Code Quality never blocks a
+  merge on its own — only Faultline's separate deterministic gate does. Line numbers
+  come from a best-effort Orbit `start_line` lookup; when absent, findings degrade to
+  line 1 (file-level) rather than inventing a position.
 
 ## Complexity
 

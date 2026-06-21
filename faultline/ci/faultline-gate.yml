@@ -37,14 +37,21 @@ faultline-gate:
       faultline-agent --mode rest --project-id "$CI_PROJECT_ID" --changed-files "$CHANGED" \
         --engine /tmp/faultline/engine/target/release/faultline-engine \
         --repo-root "$CI_PROJECT_DIR" --post-mr "$CI_MERGE_REQUEST_IID" \
-        --html-out "$CI_PROJECT_DIR/faultline-graph.html" --gate-untested "${FAULTLINE_GATE:--1}"
-  # The interactive blast-radius graph is exposed in the MR widget ("View exposed
-  # artifact"). when:always so it survives a gate failure. On gitlab.com the file
-  # downloads (served text/plain) and opens fully interactive in any browser; enable
-  # GitLab Pages to preview it inline.
+        --html-out "$CI_PROJECT_DIR/faultline-graph.html" \
+        --codequality-out "$CI_PROJECT_DIR/gl-code-quality-report.json" \
+        --gate-untested "${FAULTLINE_GATE:--1}"
+  # Two surfaces survive a gate failure (when:always):
+  #  - the interactive blast-radius graph, exposed in the MR widget ("View exposed
+  #    artifact"); on gitlab.com it downloads (text/plain) and opens interactive in
+  #    any browser — enable GitLab Pages to preview it inline.
+  #  - a Code Quality report, so every untested impacted function shows in the MR
+  #    Reports tab (Free tier; inline on the diff on Ultimate). Code Quality is
+  #    ADVISORY — it never blocks a merge on its own; the gate above does that.
   artifacts:
     when: always
     expose_as: 'Faultline interactive graph'
     paths:
       - faultline-graph.html
+    reports:
+      codequality: gl-code-quality-report.json
     expire_in: 1 week

@@ -40,6 +40,10 @@ type orbitNode struct {
 	Name           string `json:"name"`
 	FilePath       string `json:"file_path"`
 	DefinitionType string `json:"definition_type"`
+	// StartLine is best-effort: populated only by the optional linesQuery (some
+	// Orbit versions expose it on Definition nodes) and used solely to place Code
+	// Quality findings on the exact line. Absent ⇒ findings fall back to line 1.
+	StartLine int `json:"start_line"`
 }
 
 type orbitEdge struct {
@@ -853,6 +857,14 @@ func extendsQuery(pid, limit int) string {
 	return fmt.Sprintf(`{"query":{"query_type":"traversal","nodes":[{"id":"a","entity":"Definition","columns":["name","file_path","definition_type"],"filters":{"project_id":{"op":"eq","value":%d}}},{"id":"b","entity":"Definition","columns":["name","file_path","definition_type"]}],"relationships":[{"type":"EXTENDS","from":"a","to":"b","min_hops":1,"max_hops":1,"direction":"outgoing"}],"limit":%d},"response_format":"raw"}`, pid, limit)
 }
 
+// linesQuery is a best-effort fetch of Definition start lines, used only to place
+// Code Quality findings precisely. It is requested separately (not folded into
+// defsQuery) so that an Orbit version which does not expose `start_line` fails
+// only THIS query — the core analysis is untouched and findings degrade to line 1.
+func linesQuery(pid, limit int) string {
+	return fmt.Sprintf(`{"query":{"query_type":"traversal","node":{"id":"d","entity":"Definition","columns":["start_line"],"filters":{"project_id":{"op":"eq","value":%d}}},"limit":%d},"response_format":"raw"}`, pid, limit)
+}
+
 func splitNonEmpty(s string) []string {
 	var out []string
 	for _, p := range strings.Split(s, ",") {
@@ -884,6 +896,7 @@ func main() {
 	repoRoot := flag.String("repo-root", "", "repo checkout to scan for test coverage of impacted symbols (untested blast radius)")
 	gateUntested := flag.Int("gate-untested", -1, "if >=0, exit non-zero when untested-impacted count exceeds N (gates the MR)")
 	htmlOut := flag.String("html-out", "", "optional path to write a self-contained interactive blast-radius graph (HTML)")
+	codeQualityOut := flag.String("codequality-out", "", "optional path to write a GitLab Code Quality report (e.g. gl-code-quality-report.json) of the untested impacted functions")
 	flag.Parse()
 
 	if *pid == 0 || *enginePath == "" {
@@ -993,6 +1006,26 @@ func main() {
 	blocking := *gateUntested >= 0 && len(untested) > *gateUntested
 	md := renderMarkdown(rep, changedNames, untested, blocking)
 	md += hubNotes(g, changed, hubFanInThreshold())
+
+	// Native GitLab surface: a Code Quality report so each untested impacted function
+	// shows in the MR Reports tab (Free tier) — and inline on the diff (Ultimate). It
+	// is advisory; Code Quality never blocks a merge on its own (the gate below does).
+	if *codeQualityOut != "" {
+		lineByID := map[string]int{}
+		if lr, lerr := query(linesQuery(*pid, limit)); lerr == nil {
+			for _, n := range lr.Result.Nodes {
+				if n.StartLine > 0 {
+					lineByID[n.ID] = n.StartLine
+				}
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "faultline-agent: start_line unavailable, Code Quality findings placed at line 1: %v\n", lerr)
+		}
+		cq, cerr := buildCodeQuality(untested, rep.MinimumTestSet, rep.CoverageRanking, blocking, lineByID)
+		fatal(cerr)
+		fatal(os.WriteFile(*codeQualityOut, cq, 0o644))
+		fmt.Fprintf(os.Stderr, "faultline-agent: wrote Code Quality report (%d finding(s)) to %s\n", len(untested), *codeQualityOut)
+	}
 
 	// Governance: map the project's CODEOWNERS onto the blast radius — owners of
 	// impacted-but-unchanged files that GitLab's diff-only Code Owners would miss.
