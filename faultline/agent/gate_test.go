@@ -7,7 +7,7 @@ import (
 
 func TestGateDecisionNotTriggered(t *testing.T) {
 	// 1 untested, threshold 1 → not over → no gate, no advisory note.
-	block, reason := gateDecision(1, 1, false, nil, "")
+	block, reason := gateDecision(1, 1, false, false, nil, "")
 	if block || reason != "" {
 		t.Fatalf("under threshold should not block: block=%v reason=%q", block, reason)
 	}
@@ -15,7 +15,7 @@ func TestGateDecisionNotTriggered(t *testing.T) {
 
 func TestGateDecisionBlocks(t *testing.T) {
 	// 3 untested, threshold 0, not draft, no override → block.
-	block, reason := gateDecision(0, 3, false, nil, "")
+	block, reason := gateDecision(0, 3, false, false, nil, "")
 	if !block || reason != "" {
 		t.Fatalf("over threshold should block with no advisory: block=%v reason=%q", block, reason)
 	}
@@ -23,13 +23,13 @@ func TestGateDecisionBlocks(t *testing.T) {
 
 func TestGateDecisionDisabled(t *testing.T) {
 	// gateUntested < 0 means gating off entirely.
-	if block, _ := gateDecision(-1, 99, false, nil, ""); block {
+	if block, _ := gateDecision(-1, 99, false, false, nil, ""); block {
 		t.Fatal("gate disabled (-1) must never block")
 	}
 }
 
 func TestGateDecisionDraftIsAdvisory(t *testing.T) {
-	block, reason := gateDecision(0, 3, true, nil, "")
+	block, reason := gateDecision(0, 3, false, true, nil, "")
 	if block {
 		t.Fatal("draft MR must never block")
 	}
@@ -39,7 +39,7 @@ func TestGateDecisionDraftIsAdvisory(t *testing.T) {
 }
 
 func TestGateDecisionOverrideLabelIsAuditedAdvisory(t *testing.T) {
-	block, reason := gateDecision(0, 3, false, []string{"bug", "faultline-override"}, "hotfix, owner approved")
+	block, reason := gateDecision(0, 3, false, false, []string{"bug", "faultline-override"}, "hotfix, owner approved")
 	if block {
 		t.Fatal("override label must turn the gate advisory")
 	}
@@ -49,14 +49,14 @@ func TestGateDecisionOverrideLabelIsAuditedAdvisory(t *testing.T) {
 }
 
 func TestGateDecisionOverrideWithoutReason(t *testing.T) {
-	_, reason := gateDecision(0, 3, false, []string{"faultline-override"}, "")
+	_, reason := gateDecision(0, 3, false, false, []string{"faultline-override"}, "")
 	if !strings.Contains(reason, "no reason provided") {
 		t.Fatalf("missing reason should be recorded explicitly: %q", reason)
 	}
 }
 
 func TestGateDecisionUnrelatedLabelsStillBlock(t *testing.T) {
-	if block, _ := gateDecision(0, 3, false, []string{"bug", "needs-review"}, ""); !block {
+	if block, _ := gateDecision(0, 3, false, false, []string{"bug", "needs-review"}, ""); !block {
 		t.Fatal("unrelated labels must not suppress the gate")
 	}
 }

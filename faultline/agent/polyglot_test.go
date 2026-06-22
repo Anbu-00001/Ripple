@@ -194,7 +194,7 @@ func TestPolyglotEndToEndThroughEngine(t *testing.T) {
 	}
 
 	// One verdict naming all three languages' files.
-	md := renderMarkdown(rep, []string{arms[0].baseName, arms[1].baseName, arms[2].baseName}, untested, false)
+	md := renderMarkdown(rep, []string{arms[0].baseName, arms[1].baseName, arms[2].baseName}, untested, false, true, "")
 	for _, f := range []string{"rates.go", "rates.py", "rates.rb"} {
 		if !strings.Contains(md, f) {
 			t.Fatalf("verdict should mention %s (polyglot in one report):\n%s", f, md)

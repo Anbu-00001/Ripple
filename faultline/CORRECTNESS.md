@@ -161,6 +161,20 @@ reads as *correct*, not broken:
   therefore traces callers of *modified existing* symbols; a symbol that exists only
   on the MR's source branch correctly shows an empty radius (it has no indexed
   callers yet) rather than a false alarm.
+- **Fail closed on an incomplete index.** An empty blast radius is only trustworthy if
+  the graph it was computed over is actually there. Before reporting a clean result,
+  Faultline reads Orbit's free (no-quota) `GET /orbit/status` and
+  `GET /orbit/graph_status?project_id=…` and checks three principled, threshold-free
+  signals: the cluster is reachable, every known project is indexed
+  (`projects.indexed == total_known`), and the code graph holds definitions
+  (`source_code.Definition > 0`). If the index is absent, partial, or still indexing,
+  a clean result is **not** shown as a green ✅ — it degrades to a distinct
+  *🟡 "can't vouch"* verdict that **fails the gate closed** when gating is on (advisory
+  otherwise, so first adoption on an unindexed repo never blocks), with the
+  `faultline-override` label as the audited escape. A shape Orbit does not return
+  (Beta: "ontology may change") degrades to *unknown* — noted, never a false block.
+  This is the same instinct as Orbit's own code indexer, which refuses stale cleanup on
+  a degraded re-index rather than silently tombstoning good data.
 - **Determinism is relative to the indexed snapshot.** Same MR + same Orbit graph ⇒
   a byte-identical verdict — that is the guarantee. Because Orbit re-indexes the
   default branch over time, the verdict can legitimately change between runs when the

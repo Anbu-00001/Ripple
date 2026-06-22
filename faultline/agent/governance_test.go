@@ -49,7 +49,7 @@ func TestVerdictIncludesGovernanceAndClosedLoop(t *testing.T) {
 	}
 
 	untested := untestedImpact(rep.BlastRadius, "") // empty corpus => all impacted untested
-	md := renderMarkdown(rep, []string{"helper"}, untested, false)
+	md := renderMarkdown(rep, []string{"helper"}, untested, false, true, "")
 	md += ownershipReach(root, rep.BlastRadius, map[string]bool{"helper.go": true})
 	md += duoHandoff(rep.MinimumTestSet)
 

@@ -15,6 +15,12 @@
 # merge on the first run: by default ($FAULTLINE_GATE unset) the job is comment-only.
 # Set a CI/CD variable FAULTLINE_GATE to a number N to fail the pipeline when MORE
 # than N untested-impacted symbols are found (FAULTLINE_GATE=0 is strict / zero-tolerance).
+#
+# Fail-closed on a stale index: before reporting a clean result the gate checks Orbit's
+# free status + graph_status endpoints; if the project's code index is absent, partial,
+# or still indexing, it will not show a green pass — it returns a 🟡 "can't vouch"
+# verdict (blocking when FAULTLINE_GATE is set, advisory otherwise). The
+# faultline-override label is the audited escape.
 workflow:
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'

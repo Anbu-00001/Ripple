@@ -647,8 +647,15 @@ func recipeComparison(r report) string {
 // seconds; `blocking` says whether this verdict will actually fail the pipeline,
 // so the badge matches reality. A plain-language summary + one action line lead;
 // the rigorous math is tucked into a collapsible <details>.
-func renderMarkdown(r report, changedNames []string, untested []impacted, blocking bool) string {
+func renderMarkdown(r report, changedNames []string, untested []impacted, blocking bool, vouch bool, vouchReason string) string {
 	var b strings.Builder
+
+	// When Orbit's index can't be vouched for, a clean (empty / all-tested) result is
+	// a likely false negative — never show a green ✅ for it. Findings, by contrast,
+	// are real (the graph was not empty), so those keep their badge with a caveat below.
+	if !vouch && (r.ImpactedCount == 0 || len(untested) == 0) {
+		return cantVouchVerdict(blocking, vouchReason)
+	}
 
 	if r.ImpactedCount == 0 {
 		who := "the changed code"
@@ -686,6 +693,9 @@ func renderMarkdown(r report, changedNames []string, untested []impacted, blocki
 	} else {
 		b.WriteString("## 🪨 Faultline · ⚠️ Heads-up (won't block your merge)\n\n")
 	}
+	if !vouch && vouchReason != "" {
+		b.WriteString("> ⚠️ **Index caveat:** " + vouchReason + " — the impact below may be **undercounted**.\n\n")
+	}
 	b.WriteString(reach + " — " + depthNote + fmt.Sprintf(". **%d** of them have **no test**.\n", len(untested)))
 
 	if len(r.MinimumTestSet) > 0 {
@@ -710,6 +720,35 @@ func renderMarkdown(r report, changedNames []string, untested []impacted, blocki
 	} else {
 		b.WriteString("\n**This won't block your merge** unless your team turns blocking on (a `FAULTLINE_GATE` threshold); adding the test(s) above clears it.\n")
 	}
+	b.WriteString(faultlineFooter())
+	return b.String()
+}
+
+// cantVouchVerdict is the verdict when Orbit's code index can't be trusted (absent,
+// partial, or still indexing). A clean result over an untrustworthy index is a false
+// negative, so Faultline refuses to show a green ✅: it fails closed when gating is on
+// and warns otherwise. This mirrors Orbit's own indexer, which refuses to act on a
+// degraded re-index rather than silently tombstoning good data.
+func cantVouchVerdict(blocking bool, reason string) string {
+	var b strings.Builder
+	if blocking {
+		b.WriteString("## 🪨 Faultline · ⛔ Blocked — can't vouch for this result\n\n")
+	} else {
+		b.WriteString("## 🪨 Faultline · 🟡 Can't vouch — Orbit index incomplete\n\n")
+	}
+	if reason == "" {
+		reason = "Orbit's code index for this project looks incomplete."
+	}
+	b.WriteString("**" + reason + "**\n\n")
+	b.WriteString("An empty or all-clear blast radius can't be trusted while the index is incomplete, so Faultline will not report this change as safe. ")
+	if blocking {
+		b.WriteString("Because gating is on, the merge is blocked (fail-closed). ")
+	}
+	b.WriteString("Re-run once Orbit has finished indexing the default branch")
+	if blocking {
+		b.WriteString(", or apply the `" + overrideLabel + "` label for an audited bypass")
+	}
+	b.WriteString(".\n")
 	b.WriteString(faultlineFooter())
 	return b.String()
 }
@@ -1014,6 +1053,9 @@ func main() {
 		os.Exit(2)
 	}
 
+	// idx captures whether Orbit's code index can be trusted for this project; in glab
+	// mode the check is skipped (unknown → never blocks). See orbithealth.go.
+	idx := idxHealth{state: idxUnknown, reason: "index health check runs only in --mode rest"}
 	query := queryGlab
 	switch *mode {
 	case "glab":
@@ -1024,6 +1066,7 @@ func main() {
 			fatal(fmt.Errorf("rest mode requires AI_FLOW_GITLAB_TOKEN or GITLAB_TOKEN env var"))
 		}
 		query = func(body string) (orbitResp, error) { return queryREST(body, *host, token) }
+		idx = fetchIndexHealth(*host, token, *pid)
 	default:
 		fatal(fmt.Errorf("unknown --mode %q (want glab or rest)", *mode))
 	}
@@ -1091,7 +1134,35 @@ func main() {
 
 	changed := resolveChanged(g, splitNonEmpty(*changedDefs), changedFileList, changedLines, lineRange)
 	if len(changed) == 0 {
-		fatal(fmt.Errorf("no changed definitions resolved (project may be unindexed, or files have no definitions)"))
+		// No changed symbol resolved. If Orbit's index is degraded this is most likely
+		// "not indexed yet", not "genuinely no callers" — emit a can't-vouch verdict
+		// (fail-closed when gating is on) instead of a cryptic abort.
+		if idx.degraded() {
+			block, _ := gateDecision(*gateUntested, 0, true,
+				strings.EqualFold(strings.TrimSpace(*draft), "true"),
+				splitNonEmpty(*mrLabels), *overrideReason)
+			md := cantVouchVerdict(block, idx.reason)
+			if *postMR > 0 {
+				token := orbitToken()
+				if token == "" {
+					fatal(fmt.Errorf("--post-mr requires AI_FLOW_GITLAB_TOKEN or GITLAB_TOKEN env var"))
+				}
+				proj := *mrProject
+				if proj == 0 {
+					proj = *pid
+				}
+				fatal(postMRNote(*host, token, proj, *postMR, md))
+				fmt.Printf("posted Faultline can't-vouch verdict to MR !%d (project %d)\n", *postMR, proj)
+			} else {
+				fmt.Println(md)
+			}
+			if block {
+				fmt.Fprintln(os.Stderr, "faultline-agent: GATE FAILED (fail-closed) — Orbit index incomplete: "+idx.reason)
+				os.Exit(1)
+			}
+			return
+		}
+		fatal(fmt.Errorf("no changed definitions resolved (files have no indexed definitions)"))
 	}
 
 	graphPath := *graphOut
@@ -1180,11 +1251,14 @@ func main() {
 	}
 
 	// Apply the gate plus the adoption-comfort escapes (draft MR / audited override).
-	// `block` drives both the ⛔/⚠️ badge and the final exit code.
-	block, advisoryReason := gateDecision(*gateUntested, len(untested),
+	// `block` drives both the ⛔/⚠️ badge and the final exit code. A degraded Orbit
+	// index (cantVouch) fails the gate closed when gating is on, and downgrades a clean
+	// result from ✅ to 🟡 "can't vouch" so an incomplete graph never reads as safe.
+	cantVouch := idx.degraded()
+	block, advisoryReason := gateDecision(*gateUntested, len(untested), cantVouch,
 		strings.EqualFold(strings.TrimSpace(*draft), "true"),
 		splitNonEmpty(*mrLabels), *overrideReason)
-	md := renderMarkdown(rep, changedNames, untested, block)
+	md := renderMarkdown(rep, changedNames, untested, block, !cantVouch, idx.reason)
 	if advisoryReason != "" {
 		md += "\n" + advisoryReason + "\n"
 	}

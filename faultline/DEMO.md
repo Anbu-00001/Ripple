@@ -64,7 +64,7 @@ Orbit query can reach — and it doesn't just comment, it **blocks** on the part
 **1:45–2:15 — Trustworthy + proven (Technological Implementation).** *"The verdict is computed
 deterministically — same change, same answer, every run, with no model in the decision. And the
 recommended test set is provably the smallest one, machine-checked against brute force across
-91 tests."* Flash BugsInPy: *"On 21 of 32 real, reproduced Python regressions, this gate would
+107 tests."* Flash BugsInPy: *"On 21 of 32 real, reproduced Python regressions, this gate would
 have fired and named the test to add."*
 
 **2:15–2:40 — Close the loop + honesty.** Show the **GitLab Duo** hand-off — Faultline names the
