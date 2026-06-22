@@ -1,18 +1,28 @@
-# Catalog publishing pipeline for the Faultline AI Catalog layer.
+# Faultline's own pipeline. Two purposes:
 #
-# This file exists ONLY to sync the declarative agent(s) under `agents/`
-# (and flow(s) under `flows/`) into the GitLab AI Catalog. It is SEPARATE
-# from the Faultline demo project's MR pipeline that builds/runs the Rust engine
-# and Go agent — that compute lives in the `faultline-demo` project's own CI.
+# 1. AI Catalog sync — publishes the declarative agent(s) under `agents/`
+#    (and flow(s) under `flows/`) into the GitLab AI Catalog. Runs on a GIT TAG
+#    push (see CATALOG.md); needs CI/CD var CATALOG_SYNC_TOKEN (Project Access
+#    Token, `api` scope, Maintainer role). Component pinned to @0.0.20.
 #
-# The catalog-sync component runs on a GIT TAG push (see CATALOG.md). It needs
-# a CI/CD variable CATALOG_SYNC_TOKEN (Project Access Token, `api` scope,
-# Maintainer role; a group-level token is required to enable the agent in
-# member projects).
-#
-# Component pinned to @0.0.20 (verified schema/version).
+# 2. Dogfooding — Faultline gates its own repository with the exact remote
+#    `include:` line we ship to users (see README / ci/faultline-gate.yml). It
+#    runs on every merge request, pulls this repo's call graph from GitLab Orbit,
+#    composes the full reverse-CALLS closure of the changed symbols, and posts the
+#    verdict. It is ADVISORY here: FAULTLINE_TOKEN is set but FAULTLINE_GATE is
+#    left UNSET, so it comments ("⚠️ Heads-up") and never blocks our own dev MRs.
+#    Set FAULTLINE_GATE=0 to make it strict (zero untested impact tolerated).
 
 include:
   - component: $CI_SERVER_HOST/components/ai-catalog/catalog-sync@0.0.20
     inputs:
-      group_id: 134742282  # VERIFY: top-level group `anbuchelvanganesan.cse2024-group` numeric id
+      group_id: 134742282  # top-level group `anbuchelvanganesan.cse2024-group` numeric id
+  - remote: 'https://gitlab.com/anbuchelvanganesan.cse2024-group/faultline/-/raw/main/ci/faultline-gate.yml'
+
+# The gate include scopes the pipeline to merge_request_event. We declare the
+# union here so the AI-Catalog sync still fires on tag pushes — the main file's
+# `workflow` overrides any `workflow` an included file defines.
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_TAG'

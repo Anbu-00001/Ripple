@@ -1,11 +1,14 @@
 # Faultline — Devpost writeup
 
-> **Orbit can *describe* a change's blast radius. Faultline makes Orbit *enforce* it — Code Owners for the blast radius, not the diff.**
+> **GitLab built Orbit to answer one question — *"What breaks if I change this service?"* — from *indexed facts, not inference*. Faultline takes that answer the last mile: it doesn't just describe a change's blast radius, it enforces it. Code Owners for the blast radius, not the diff.**
 
 A deterministic GitLab CI merge gate, built on **GitLab Orbit** (the code Knowledge Graph), that computes the *full transitive* set of callers of the symbols a merge request changes, finds the impacted code with **no test coverage**, and **blocks the merge** — with a plain-language verdict and the single smallest test to add.
 
-- **Try it live:** [an MR that raises a tax rate by one line and fails the pipeline](https://gitlab.com/anbuchelvanganesan.cse2024-group/faultline-demo/-/merge_requests/1)
-- **Code (MIT):** the repository this writeup ships in · **91 deterministic tests**
+- **Try it live (three real merge requests):**
+  - [a one-line tax-rate change that fails the pipeline](https://gitlab.com/anbuchelvanganesan.cse2024-group/faultline-demo/-/merge_requests/1) — untested impact 5 calls deep, the one test to add
+  - [one verdict across Go + Python + Ruby](https://gitlab.com/anbuchelvanganesan.cse2024-group/faultline-polyglot/-/merge_requests/1) — a shared rate bumped in three languages, one blast radius
+  - [Faultline gating its **own** repo](https://gitlab.com/anbuchelvanganesan.cse2024-group/faultline/-/merge_requests/1) — dogfooded with the same `include:` we ship to users
+- **Code (MIT):** the repository this writeup ships in · **91 deterministic tests** · the gate fired on **21 of 32** real BugsInPy regressions
 - **Video:** _<!-- VIDEO_URL -->_
 
 ---
@@ -22,6 +25,8 @@ A deterministic GitLab CI merge gate, built on **GitLab Orbit** (the code Knowle
 
 ## Why it's a *new* capability for Orbit (the innovation)
 
+The *new capability* isn't "see the blast radius." GitLab's own Orbit cookbook ships a blast-radius recipe, and impact *visualizers* are exactly the kind of project this community already celebrates — so seeing it is table stakes. Faultline's leap is from **viewer to enforcer**: it turns Orbit's graph into a **prescription** and a **gate** — a deterministic, **provably-minimal set of tests** (a min vertex cut, minimal with respect to the call graph Orbit returns and the coverage signal in use) that closes the *untested* impact, plus **exact per-symbol risk attribution** (Shapley) — computed, not guessed. No shipping tool does that on Orbit. Reaching it needs the one thing a single interactive Orbit query won't hand you — the *complete* transitive closure — so Faultline composes it.
+
 Orbit's query DSL traverses the `CALLS` edge with a **depth bound** (`max_hops: 3`, to keep interactive queries fast) and **no unbounded transitive-closure operator**. That bound is right for a live query; a merge gate needs the complete set. You can confirm the bound against the live API:
 
 ```
@@ -35,7 +40,7 @@ So one Orbit query gives bounded reach; the **complete transitive caller set at 
 
 ## How it compares to other Orbit blast-radius agents
 
-Blast-radius-on-Orbit is the most crowded lane in this hackathon, and the good entries are deterministic and open-source — so "deterministic" isn't the differentiator. Three things are. **Depth:** the others query Orbit directly (`query_graph`) or walk `CALLS` ≤ 3 hops — one even ships its number as an explicit *"lower bound"* — whereas Faultline pulls the edges and *closes the graph client-side*, surfacing impact at any depth (the demo reaches 5 hops, past Orbit's cap). **Prescription:** the comment-only reviewers stop at a risk verdict, and the gate that does block uses a *greedy* set-cover test list; Faultline gates on **untested** impact and computes the **provably-minimal** test set (a min vertex cut, machine-checked against brute force) plus **exact Shapley** attribution per changed symbol. **Reach across a real stack:** the others are effectively Python-only; Faultline's engine is language-blind, proven on **Go + Python + Ruby**, with real Cobertura/lcov coverage. Same shape of tool, taken further — not "here's the blast radius," but "here's the smallest set of tests that closes the *untested* part of it, across your languages, deeper than any single Orbit query can see."
+Blast-radius-on-Orbit is the most crowded lane in this hackathon, and the good entries are deterministic and open-source — so "deterministic" isn't the differentiator. Three things are. **Depth:** the others query Orbit directly (`query_graph`) or walk `CALLS` ≤ 3 hops — one even ships its number as an explicit *"lower bound"* — whereas Faultline pulls the edges and *closes the graph client-side*, surfacing impact at any depth (the demo reaches 5 hops, beyond what a single bounded query returns). **Prescription:** the comment-only reviewers stop at a risk verdict, and the gate that does block uses a *greedy* set-cover test list; Faultline gates on **untested** impact and computes the **provably-minimal** test set (a min vertex cut, machine-checked against brute force) plus **exact Shapley** attribution per changed symbol. **Reach across a real stack:** the others are effectively Python-only; Faultline's engine is language-blind, proven on **Go + Python + Ruby**, with real Cobertura/lcov coverage. Same shape of tool, taken further — not "here's the blast radius," but "here's the smallest set of tests that closes the *untested* part of it, across your languages, deeper than any single Orbit query can see."
 
 ---
 
@@ -47,6 +52,12 @@ A two-language core, deterministic end to end — **no model in the decision pat
 - **Go agent** — pulls Definitions + one-hop `CALLS`/`EXTENDS` from Orbit, normalizes, runs the engine, determines coverage (**real Cobertura/lcov execution data** when provided, a name-reference heuristic otherwise), and renders the plain-language verdict + a colorblind-safe graph. It also emits a **native GitLab Code Quality report** (every untested impacted function shows in the MR Reports tab on the Free tier) and hands the minimum test set to a **GitLab Duo** flow to open a *draft* test MR — a human still approves.
 
 **Adoption is one line** of `.gitlab-ci.yml` (a remote `include:`), with a companion declarative agent published to the **AI Catalog**. Gating is opt-in; draft MRs are advisory; a `faultline-override` label is an *audited* bypass.
+
+### On the Duo Agent Platform — Tools · Triggers · Context
+
+- **Context — GitLab Orbit, the Knowledge Graph.** Faultline's grounding context is Orbit's indexed `CALLS`/`EXTENDS` edges, definitions, and line ranges — *indexed facts, not inference*. It uses only what the schema supports and refuses the joins it doesn't.
+- **Triggers — the merge request.** The gate runs on the `merge_request_event` pipeline; the published **AI Catalog** agent (*Faultline Impact Reviewer*) reacts in review; the closed loop fires on the verdict (and can run as a `pipeline: failed` Duo flow) to hand off the fix.
+- **Tools / actions.** Faultline queries Orbit's graph, posts the MR verdict note, emits a native **Code Quality** report, and hands the minimum test set to a **Duo flow** that opens a *draft* test MR (a human approves). The verdict itself is a deterministic engine — *no model in the decision path* — so the platform's context and tools feed a **provable** gate, not a guess.
 
 ---
 
@@ -60,7 +71,7 @@ We ran the **exact engine binary** against real, reproduced regressions from **B
 
 The verdict **leads in plain language** — "what this change could affect", "functions with no test", "fastest fix" — with three fixed status badges and the math behind progressive disclosure. The graph uses a **colorblind-safe palette with shape redundancy**, and ships as a zero-dependency interactive HTML artifact whose layout is computed deterministically (byte-identical every run).
 
-And we were **ruthlessly honest with ourselves**: a planned "cost-aware weighted cut" feature was dropped after we *proved* (33,652 random trials) it would be a mathematical no-op in our formulation — shipping it would have been complexity for show. Faultline also **refuses the cross-domain graph joins Orbit's schema can't support** and states its own soundness boundary out loud. A tool whose pitch is "the AI figures it out" structurally can't make claims like these.
+And we were **ruthlessly honest with ourselves**: a planned "cost-aware weighted cut" feature was dropped after we *proved* (33,652 random trials) it would be a mathematical no-op in our formulation — shipping it would have been complexity for show. Faultline also **refuses the cross-domain graph joins Orbit's schema can't support** and states its own soundness boundary out loud. None of this is anti-AI — it's about where AI belongs. Put a model in the *decision* path and you inherit a verdict you can't reproduce or audit; keep it out, and the gate can promise the same answer twice. So the decision stays deterministic, and a GitLab Duo flow does what AI is genuinely good at: drafting the test MR for a human to approve.
 
 ---
 

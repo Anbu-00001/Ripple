@@ -40,7 +40,11 @@ min-cut (Menger 1927; Ford–Fulkerson 1956), so the returned set is the smalles
 possible — strictly stronger than the greedy set-cover other tools ship.
 
 **Invariant:** `min_test_cut` returns a set that (a) *separates* the change from all
-untested impacted code and (b) is of **minimum** cardinality.
+untested impacted code and (b) is of **minimum** cardinality — minimum over the graph
+supplied to the engine (the closure built from Orbit's indexed `CALLS`/`EXTENDS`
+edges). Minimality is relative to that graph and to the coverage signal in use: if
+Orbit has not indexed a call, no downstream tool can cut an edge it cannot see. The
+math is exact; its inputs are the indexed facts.
 
 **How it's enforced:** `cut_is_minimal_and_valid_vs_bruteforce` (`engine/src/main.rs`)
 generates 300 random graphs and checks the returned cut against an **independent
@@ -157,6 +161,12 @@ reads as *correct*, not broken:
   therefore traces callers of *modified existing* symbols; a symbol that exists only
   on the MR's source branch correctly shows an empty radius (it has no indexed
   callers yet) rather than a false alarm.
+- **Determinism is relative to the indexed snapshot.** Same MR + same Orbit graph ⇒
+  a byte-identical verdict — that is the guarantee. Because Orbit re-indexes the
+  default branch over time, the verdict can legitimately change between runs when the
+  *graph* changes (a newly-merged caller appears, a symbol is renamed): that is a
+  correct reflection of new facts, not nondeterminism. Faultline analyzes the graph
+  as indexed at run time; it never silently serves a stale snapshot.
 - **Coverage: real execution data when provided, else a conservative name heuristic.**
   When a `cobertura`/`lcov` report is supplied (`FAULTLINE_COVERAGE`), "untested" means
   an impacted symbol's executed line range has no covered lines — real execution
@@ -183,10 +193,15 @@ reads as *correct*, not broken:
   mention trigger). The flow opens a **draft** MR a human must approve; no model is in
   the verdict's compute path and the gate never auto-merges (see `CLOSED_LOOP.md`).
 
-## Why deterministic beats an LLM here
+## Why the decision path is deterministic (and where AI still helps)
 
-An LLM reviewer can *summarize* likely impact, but it cannot promise the same answer
-twice, and it cannot assert completeness. A flaky or incomplete gate is worse than
-no gate. Faultline trades open-ended reasoning for a narrow, provable property —
-**the complete transitive closure, computed the same way every time** — which is
-exactly what a merge-blocking control plane requires.
+An LLM reviewer can *summarize* likely impact, and that is genuinely useful — but it
+cannot promise the same answer twice, and it cannot assert completeness. GitLab makes
+the same point about graph traversal versus inference: lean on a model to walk the
+structure and "error compounds with every hop." A merge-blocking gate is the wrong
+place to inherit that drift; a flaky or incomplete gate is worse than no gate. So
+Faultline keeps the *decision* deterministic — a narrow, provable property,
+**the complete transitive closure, computed the same way every time** — that a human
+can re-run and audit. AI is not banished; it is kept out of the verdict. Once the gate
+decides, a GitLab Duo flow drafts the test MR for a human to approve: AI where it
+accelerates, not where it adjudicates.
