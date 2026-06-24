@@ -11,7 +11,7 @@ A deterministic GitLab CI merge gate, built on **GitLab Orbit** (the code Knowle
   - [one verdict across Go + Python + Ruby](https://gitlab.com/anbuchelvanganesan.cse2024-group/faultline-polyglot/-/merge_requests/1) — a shared rate bumped in three languages, one blast radius
   - [Faultline gating its **own** repo](https://gitlab.com/anbuchelvanganesan.cse2024-group/faultline/-/merge_requests/1) — dogfooded with the same `include:` we ship to users
 - **Code (MIT):** the repository this writeup ships in · **110 deterministic tests** · the gate fired on **21 of 32** real BugsInPy regressions
-- **Video:** _<!-- VIDEO_URL -->_
+- **Video:** [▶ Watch the 3-min demo](https://youtu.be/zG4Gs0Y3a0Y)
 
 ---
 

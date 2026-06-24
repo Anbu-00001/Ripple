@@ -31,6 +31,8 @@ The previous GitLab AI Hackathon gave its Grand Prize to a project for letting y
 
 ## Try it live
 
+▶ **[Watch the 3-minute demo](https://youtu.be/zG4Gs0Y3a0Y)** — or get hands-on below.
+
 Three real, public merge requests — open one and read the verdict on the red pipeline:
 
 | Demo | What you'll see |
