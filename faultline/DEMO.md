@@ -4,7 +4,10 @@ This is a **read-through, not a guess**: a shot-by-shot storyboard with timings,
 on screen, and the exact voiceover for each beat. It is optimized for the four equal
 judging criteria (Technological Implementation · Design & Usability · Potential Impact ·
 Quality of Idea) and for what these GitLab judges have rewarded before: *"agents that
-act, not chatbots"*, *"feels like a product"*, heavy testing, and quantified impact.
+act, not chatbots"*, *"feels like a product"*, heavy testing, quantified impact — and the
+change-impact-on-the-graph project (**GraphDev**) that won the previous GitLab AI Hackathon's
+Grand Prize for *showing* "what gets impacted by changes", which Faultline turns from a
+**viewer** into an **enforcer**.
 
 **Hard rules (from the host + demo-craft research):** ≤ 3:00 (judges may stop at 3:00,
 so **front-load** everything); upload to YouTube/Vimeo **public**, marked *Not for Kids*;
@@ -23,7 +26,7 @@ Every on-screen claim below is **live and re-verifiable** by a judge — no mock
 |---|------|-----------|------------------------------|----------|
 | **0 · Cold open — the result first** | 0:00–0:12 | A real GitLab MR, pipeline **RED**, zoom on the verdict: **⛔ Faultline · Blocked**. Lower-third caption: *"GitLab Transcend Hackathon · Faultline · built on GitLab Orbit."* | "This one-line change just got **blocked from merging** — because it breaks code that nobody tested. Here's the agent that caught it." | Impact · Design |
 | **1 · The stakes** | 0:12–0:30 | Split screen: the tiny diff (one constant in `calc/tax.go`) ↔ a fan-out of impacted functions; badge **"7 impacted · 5 untested."** | "A one-line helper change can ripple across the whole call graph. Review only shows the diff — the blast radius is invisible. Faultline computes it from GitLab Orbit, your code's knowledge graph." | Impact · Idea |
-| **2 · It ACTS (not a chatbot)** | 0:30–0:52 | The pipeline job log: Faultline reads the MR, queries Orbit, posts the verdict. Zoom the plain-language lines. | "It's not a chatbot you ask. It runs as a CI gate, acts on the merge itself, and blocks it — then tells you the **one** test to add: a test at `Rate` covers all five untested paths." | Tech · Impact |
+| **2 · It ACTS — and hands you the fix** | 0:30–0:52 | The pipeline job log: Faultline reads the MR, queries Orbit, posts the verdict; zoom the plain-language lines, then the **prescription** (one test at `Rate`). Optionally flash the **Duo draft test-MR** it opens. | "It's not a chatbot you ask — it runs as a CI gate and acts on the merge. And it doesn't just say no: it names the **one** test that closes all five untested paths, and hands a **draft test-MR to GitLab Duo** for a human to approve. AI proposes; a person disposes." | Tech · Impact · Design |
 | **3 · Deterministic** | 0:52–1:10 | Same MR re-run twice, side by side → **byte-identical** verdict. Caption: *"No model in the decision path — same change, same verdict."* | "The decision is deterministic. No model in the loop — so no bias, no flake. The same change always produces the same verdict, and a human can re-run and audit it." | Tech · Idea |
 | **4 · Polyglot, one verdict** | 1:10–1:33 | The polyglot MR: one change in **Go + Python + Ruby**; a single verdict; language badges light up. | "One change touching Go, Python, and Ruby — and **one** blast radius across all three, because the graph is language-blind." | Tech · Idea |
 | **5 · THE WOW — deeper than one Orbit query** | 1:33–2:00 | Live terminal: `max_hops: 4` → **`compile_error`** from Orbit. Then the verdict showing `InvoiceTotal` at **5 hops**. | "Orbit caps a single query at three hops, for speed — push it to four and it refuses. So Faultline pulls the edges and closes the whole graph offline, reaching code five calls deep that no single Orbit query can — and blocks on the part that's untested." | Idea · Tech |
@@ -41,6 +44,14 @@ chatbot" answers Veenhof directly; quantified badges echo the "43 tests" praise;
 `max_hops:4 → compile_error` and fail-closed beats are our unique, fully-demonstrable
 "wow" that separates us from the other blast-radius entries; the one-line install answers
 Design/Usability and "feels like a product."
+
+**Final judge-aligned framings (verified 2026-06-23 — weave into the VO, don't add beats):**
+- **Open as GraphDev's successor (Veenhof):** GraphDev won the previous hackathon's Grand Prize for *showing* "what gets impacted by changes." One early caption or the close should land *"see the impact → now **enforce** it."*
+- **Lead with the fix, not the "no" (Veenhof — Design is ¼ of the score):** beat 2 now foregrounds the prescription + the **Duo draft test-MR**; frame every block as "here's the one smallest fix," never just "rejected."
+- **Show one test go red→green (Haradon):** in beat 2, run the prescribed test once *failing*, then passing — proof it's load-bearing, not coverage theater.
+- **Supervised loop (Hook / Michaux):** say *"AI proposes; a person disposes"* — the decision is deterministic, Duo only **drafts** the fix for a human to approve.
+- **One reproducible number (Meister):** keep the BugsInPy **21/32** badge and the byte-identical re-run; he scores what he can re-run. Keep "provably minimal *given the call graph Orbit returns*" — never unqualified.
+- **Real, native Duo (Michaux):** the published Catalog agent now declares Orbit's `mcp_tools` (`orbit_query_graph`) — if you can, Chat-invoke it live so the Orbit usage reads as native, not bolted-on.
 
 ---
 

@@ -1,5 +1,7 @@
 # Faultline — Devpost writeup
 
+![Faultline — Code Owners for the blast radius, not the diff. A deterministic merge gate on GitLab Orbit: one line changes, Orbit's graph shows everything it reaches through a chain of calls, the untested impact blocks the merge, and Faultline names the single smallest test that closes the gap.](docs/branding/faultline-hero.png)
+
 > **GitLab built Orbit to answer one question — *"What breaks if I change this service?"* — from *indexed facts, not inference*. Faultline takes that answer the last mile: it doesn't just describe a change's blast radius, it enforces it. Code Owners for the blast radius, not the diff.**
 
 A deterministic GitLab CI merge gate, built on **GitLab Orbit** (the code Knowledge Graph), that computes the *full transitive* set of callers of the symbols a merge request changes, finds the impacted code with **no test coverage**, and **blocks the merge** — with a plain-language verdict and the single smallest test to add.
@@ -40,7 +42,13 @@ So one Orbit query gives bounded reach; the **complete transitive caller set at 
 
 ## How it compares to other Orbit blast-radius agents
 
-Blast-radius-on-Orbit is the most crowded lane in this hackathon, and the good entries are deterministic and open-source — so "deterministic" isn't the differentiator. Three things are. **Depth:** the others query Orbit directly (`query_graph`) or walk `CALLS` ≤ 3 hops — one even ships its number as an explicit *"lower bound"* — whereas Faultline pulls the edges and *closes the graph client-side*, surfacing impact at any depth (the demo reaches 5 hops, beyond what a single bounded query returns). **Prescription:** the comment-only reviewers stop at a risk verdict, and the gate that does block uses a *greedy* set-cover test list; Faultline gates on **untested** impact and computes the **provably-minimal** test set (a min vertex cut, machine-checked against brute force) plus **exact Shapley** attribution per changed symbol. **Reach across a real stack:** the others are effectively Python-only; Faultline's engine is language-blind, proven on **Go + Python + Ruby**, with real Cobertura/lcov coverage. Same shape of tool, taken further — not "here's the blast radius," but "here's the smallest set of tests that closes the *untested* part of it, across your languages, deeper than any single Orbit query can see."
+Blast-radius-on-Orbit is the most crowded lane in this hackathon — and the strongest entries are deterministic, open-source, and genuinely deep (one traverses transitive callers *across repositories* and even fuses the SDLC graph for production reachability). So neither "deterministic" nor "sees the blast radius" is the differentiator. Three things are.
+
+**It gates the part that matters — the *untested* impact.** Every other entry we've found stops at a risk score on a comment ("N callers — HIGH"); none of them look at your tests. Faultline intersects the blast radius with the code that has **no coverage**, **blocks the merge** on it, and — uniquely — **prescribes the single smallest fix**: a **provably-minimal** test set (a min vertex cut, machine-checked against a brute-force oracle) plus **exact Shapley** attribution per changed symbol. Not "here's the blast radius," but "here are the *K* tests that close the *untested* part of it."
+
+**It's polyglot.** The others are effectively Python-only; Faultline's engine is language-blind, proven on **Go + Python + Ruby** with real Cobertura/lcov coverage — one verdict across the stack.
+
+**It runs where a gate can be trusted.** Faultline runs in **CI on Orbit's free graph API**, with **no model in the decision path**, and **fails closed** when the index is stale or partial. The live-agent reviewers reach Orbit through GitLab Duo credits and the hosted MCP *at review time*, and inherit an LLM-orchestrated run. A comment can afford that; a gate that blocks your merge cannot.
 
 ---
 
@@ -71,7 +79,7 @@ We ran the **exact engine binary** against real, reproduced regressions from **B
 
 The verdict **leads in plain language** — "what this change could affect", "functions with no test", "fastest fix" — with three fixed status badges and the math behind progressive disclosure. The graph uses a **colorblind-safe palette with shape redundancy**, and ships as a zero-dependency interactive HTML artifact whose layout is computed deterministically (byte-identical every run).
 
-And we were **ruthlessly honest with ourselves**: a planned "cost-aware weighted cut" feature was dropped after we *proved* (33,652 random trials) it would be a mathematical no-op in our formulation — shipping it would have been complexity for show. Faultline also **refuses the cross-domain graph joins Orbit's schema can't support** and states its own soundness boundary out loud. None of this is anti-AI — it's about where AI belongs. Put a model in the *decision* path and you inherit a verdict you can't reproduce or audit; keep it out, and the gate can promise the same answer twice. So the decision stays deterministic, and a GitLab Duo flow does what AI is genuinely good at: drafting the test MR for a human to approve.
+And we were **ruthlessly honest with ourselves**: a planned "cost-aware weighted cut" feature was dropped after we *proved* (33,652 random trials) it would be a mathematical no-op in our formulation — shipping it would have been complexity for show. Faultline also **refuses the cross-domain graph joins Orbit's schema can't reliably support** — production reachability, ownership, vulnerability fusion — not because they're uninteresting, but because **a gate that blocks a merge has to be sound**: an advisory comment can speculate across domains and be occasionally wrong; an enforcer cannot. So it gates only on the call graph Orbit makes trustworthy, and states its soundness boundary out loud. None of this is anti-AI — it's about where AI belongs. Put a model in the *decision* path and you inherit a verdict you can't reproduce or audit; keep it out, and the gate can promise the same answer twice. So the decision stays deterministic, and a GitLab Duo flow does what AI is genuinely good at: drafting the test MR for a human to approve.
 
 ---
 

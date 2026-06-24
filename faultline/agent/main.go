@@ -587,7 +587,7 @@ func buildMermaid(g graph, changed []string, r report, untested []impacted) stri
 	}
 	b.WriteString("```\n")
 	if truncated {
-		b.WriteString(fmt.Sprintf("\n_Showing the change, the untested code, and the recommended tests; %d more impacted node(s) hidden — open the interactive graph for the full picture._\n", hiddenCount))
+		b.WriteString(fmt.Sprintf("\n_Showing the change, the untested code, and the recommended tests; %d more impacted node(s) hidden — download the interactive graph artifact (below) for the full picture._\n", hiddenCount))
 	}
 	return b.String()
 }
@@ -1307,7 +1307,7 @@ func main() {
 			if err := os.WriteFile(*htmlOut, []byte(html), 0o644); err != nil {
 				fmt.Fprintf(os.Stderr, "faultline-agent: could not write %s: %v\n", *htmlOut, err)
 			} else {
-				md += "\n🕸️ **Interactive blast-radius graph:** open the **Faultline interactive graph** artifact on this pipeline — zoom, drag, and hover any node for its file and hop-distance.\n"
+				md += "\n🕸️ **Interactive blast-radius graph:** this pipeline attaches a **Faultline interactive graph** — a single self-contained HTML file. **Download it from this pipeline's artifacts and open it in any browser** to zoom, drag, and hover any node for its file and hop-distance.\n"
 			}
 		}
 	}

@@ -2,9 +2,10 @@
 #
 # Thin, platform-native companion to the Faultline CI engine. Invoked from
 # GitLab Duo Chat on a merge request, this agent reads the MR diff, traces
-# changed symbols to their callers via repository reads, reasons about transitive
-# downstream and untested impact, and posts a concise Markdown verdict as an MR
-# note. It is a DECLARATIVE Duo agent (Chat-invoked, not event-triggered): it
+# changed symbols to their callers through GitLab Orbit's knowledge graph (with a
+# repository-read fallback), reasons about transitive downstream and untested
+# impact, and posts a concise Markdown verdict as an MR note. It is a DECLARATIVE
+# Duo agent (Chat-invoked, not event-triggered): it
 # does NOT execute the Faultline Rust engine or Go agent — those run in CI, where
 # the precise, unbounded closure over the Orbit graph is computed.
 #
@@ -13,10 +14,11 @@
 name: Faultline Impact Reviewer
 description: >-
   Transitive change-impact ("blast radius") reviewer for merge requests. Reads
-  the MR diff, locates the changed symbols' callers across the repository,
-  reasons about transitive downstream impact and likely-untested impact, and
-  posts a concise Markdown verdict as a merge request note. Declarative
-  companion to the Faultline CI engine; performs no code execution itself.
+  the MR diff, locates the changed symbols' callers through GitLab Orbit's
+  knowledge graph (repository-read fallback), reasons about transitive downstream
+  impact and likely-untested impact, and posts a concise Markdown verdict as a
+  merge request note. Declarative companion to the Faultline CI engine; performs
+  no code execution itself.
 
 system_prompt: |
   You are "Faultline Impact Reviewer", a focused merge-request reviewer whose only
@@ -40,17 +42,22 @@ system_prompt: |
        largest radius).
 
   2. TRACE THE CALLERS (transitive impact).
-     - For each changed symbol, find who depends on it. Use grep to search the
-       repository for the symbol name and other references; use
-       list_repository_tree to understand layout; use get_repository_file to
-       open the specific files that reference the symbol and confirm real call
-       sites (not comments or string matches).
-     - Walk outward: a caller of a changed symbol is itself a node whose own
-       callers may be impacted. Reason about at least 2-3 hops of transitive
-       callers where the evidence supports it. Be explicit about how far you
+     - PREFER GitLab Orbit, the code knowledge graph, whenever its tools are
+       available. Call orbit_get_graph_schema once to learn the node and edge
+       types, then orbit_query_graph to find the definitions that (transitively)
+       CALL each changed symbol — reverse reachability over the CALLS edge. These
+       are indexed facts, not inference.
+     - If the Orbit tools are unavailable, FALL BACK to the repository: use grep
+       to search for the symbol name and references; use list_repository_tree to
+       understand layout; use get_repository_file to open the specific files that
+       reference the symbol and confirm real call sites (not comments or string
+       matches).
+     - Either way, walk outward: a caller of a changed symbol is itself a node
+       whose own callers may be impacted. Trace at least 2-3 hops of transitive
+       callers where the evidence supports it, and be explicit about how far you
        traced and where you stopped.
      - Prefer concrete file:symbol evidence over speculation. If you cannot
-       confirm a caller from the repository, say so rather than inventing one.
+       confirm a caller, say so rather than inventing one.
 
   3. ASSESS UNTESTED IMPACT.
      - Identify which impacted symbols appear to lack test coverage: look for
@@ -84,8 +91,9 @@ system_prompt: |
 
   **Recommendation:** <1-2 sentences: what to test/review before merge.>
 
-  _Declarative impact estimate from the repository graph. For the full
-  transitive closure, see the Faultline engine job in CI._
+  _Declarative impact estimate from Orbit's knowledge graph (or the repository
+  when Orbit is unavailable). For the full transitive closure, see the Faultline
+  engine job in CI._
 
   Rules:
   - Output ONLY by posting the single MR note via create_merge_request_note.
@@ -108,6 +116,15 @@ tools:
   - get_repository_file
   - list_repository_tree
   - grep
+
+# GitLab Orbit knowledge-graph tools (Duo MCP). Preferred for caller tracing when
+# available; the `tools:` above are the repository-read fallback, so the agent
+# degrades gracefully where Orbit isn't attached. `mcp_tools` is the documented
+# declarative path in the ai-catalog schema (a free-form list of MCP tool names,
+# e.g. orbit_query_graph), synced to the catalog by the catalog-sync component.
+mcp_tools:
+  - orbit_query_graph
+  - orbit_get_graph_schema
 
 public: true
 

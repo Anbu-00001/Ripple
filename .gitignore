@@ -37,3 +37,6 @@ target/
 # Python
 __pycache__/
 *.pyc
+
+# Ripple-era query fixtures
+.ripple/

@@ -1,3 +1,5 @@
+![Faultline — Code Owners for the blast radius, not the diff: a deterministic merge gate on GitLab Orbit that computes what a change reaches, blocks the merge if it's untested, and names the one test that closes the gap.](docs/branding/faultline-readme-banner.png)
+
 # 🪨 Faultline
 
 **Transitive change-impact governance for GitLab merge requests, built on [GitLab Orbit](https://about.gitlab.com/gitlab-orbit/) (the Knowledge Graph).**
@@ -20,6 +22,28 @@ Polyglot (Go · Python · Ruby) — one verdict, many languages · real coverage
 
 Faultline computes the **full transitive set of callers** ("blast radius") of the symbols changed in a merge request, intersects it with the impacted code that **lacks test coverage**, and **fails the pipeline (blocks the merge)** when an untested blast radius is found. A green-looking one-line helper change that silently reaches deep, untested code becomes a *blocked* MR with an explained verdict — written in plain language ("*Changing `parseConfig` could affect 6 functions; 3 have no tests; add 1 test at `parse_tokens` to cover them all*"), with the graph theory tucked into an expandable section for reviewers who want it.
 
+## How it works
+
+```mermaid
+flowchart TD
+    A(["Merge request opened"]):::changed --> B["Map changed lines to the<br/>exact symbols they edit"]
+    B --> H{"Orbit index<br/>healthy?"}
+    H -->|"stale / partial"| V["Can't vouch — fails closed<br/>never a false green"]:::vouch
+    H -->|"healthy"| C[("Orbit · CALLS / EXTENDS edges")]
+    C --> D["Compose the FULL transitive<br/>caller set — any depth, in CI"]
+    D --> E{"Impacted code<br/>with no test?"}
+    E -->|"no"| P["Pass"]:::tested
+    E -->|"yes"| G["Block the merge"]:::gate
+    G --> F["Name the single smallest test<br/>that closes the whole gap"]:::fix
+    classDef changed fill:#56B4E9,stroke:#0a3550,color:#06243a,stroke-width:2px
+    classDef tested fill:#009E73,stroke:#04503a,color:#ffffff,stroke-width:2px
+    classDef gate fill:#D55E00,stroke:#7a3500,color:#ffffff,stroke-width:2px
+    classDef vouch fill:#E69F00,stroke:#7a5200,color:#2a1c00,stroke-width:2px
+    classDef fix fill:#ffffff,stroke:#D55E00,color:#9a3d00,stroke-width:2px
+```
+
+Map the change to the exact symbols it edits, pull `CALLS`/`EXTENDS` from Orbit, compose the **complete** transitive caller set in CI, and block only when impacted code has **no test** — then name the single smallest test that closes the gap. A stale Orbit index fails closed instead of flashing a false green.
+
 ## The problem (documented GitLab pain)
 
 - **Code review only sees the diff.** A one-line change to a shared helper can break code *three files away* that no reviewer looked at. GitLab's own Orbit cookbook even ships a *blast-radius* recipe and frames the question — "*What breaks if I change this service?*" — but a single query answers it only to a bounded depth, and **answering** it isn't the same as **acting** on it.
@@ -33,16 +57,16 @@ Change-impact and test-impact analysis aren't new — Microsoft's Test Impact An
 
 ### vs. other Orbit blast-radius agents
 
-Blast-radius-on-Orbit is the most crowded lane in this hackathon — and several entries are deterministic and open-source, so *that* isn't the difference. The difference is **depth, optimality, and what happens after the diagnosis**:
+Blast-radius-on-Orbit is the most crowded lane in this hackathon — and the strongest entries are deterministic, open-source, and genuinely deep (the best traverses callers even *across repositories*). So neither *deterministic* nor *sees the blast radius* is the difference. The difference is **what it does after the diagnosis — and whether a gate can trust it to act**:
 
-| | **Faultline** | Comment-only reviewers | 3-hop gates |
-|---|---|---|---|
-| **Reach** | full reverse-transitive **closure, any depth** (demo: 5 hops) | Orbit `query_graph`, no client-side closure | reverse-`CALLS` **≤ 3 hops** (self-described "lower bound") |
-| **Action** | **blocks** the merge on *untested* impact | posts an MR comment, never blocks | blocks, but on impact alone |
-| **The fix** | **provably-minimal** test set (min vertex cut, brute-force-checked) | — | **greedy** set-cover (not fewest) |
-| **Attribution** | **exact Shapley** per changed symbol | — | — |
-| **Languages** | **Go · Python · Ruby** (language-blind engine) | unspecified | **Python only** |
-| **Coverage** | **real Cobertura/lcov** (name fallback) | name / none | name / none |
+| | **Faultline** | Other Orbit blast-radius agents |
+|---|---|---|
+| **Reach** | full reverse-transitive **closure, any depth**, composed in CI (demo: 5 hops) | transitive — the best even cross-repo — but via **live, agent-chained** `query_graph` |
+| **Tests** | intersects the radius with **untested** code | don't look at tests |
+| **Action** | **blocks** the merge on *untested* impact | post an MR comment / risk score; don't block |
+| **The fix** | **provably-minimal** test set (min vertex cut, brute-force-checked) + **exact Shapley** | — |
+| **Languages** | **Go · Python · Ruby** (language-blind engine) | effectively Python |
+| **Runs in** | **CI on Orbit's free graph API · fails closed on a stale index · no model in the decision** | live Duo CLI + hosted Orbit MCP (credits) |
 
 Others stop at Orbit's query and either *comment* or *gate on impact*. Faultline closes the graph **beyond a single query's depth bound** and gates on the part that matters — **untested** impact — then hands you the **fewest** tests that clear it.
 
@@ -62,6 +86,23 @@ $ curl -s -X POST "$GITLAB/api/v4/orbit/query" -H "Authorization: Bearer $TOKEN"
 
 So a single Orbit query gives you bounded reach; the **complete transitive caller set at arbitrary depth** has to be *composed*. That's exactly what a merge gate needs ("what *else* breaks if I change this?") — and what Faultline computes **offline, in CI**, from Orbit's one-hop edges, without asking Orbit for an unbounded interactive query. It completes Orbit's own "full blast radius" promise for the gate, while respecting why the interactive bound exists.
 
+```mermaid
+flowchart LR
+    S(["changed<br/>symbol"]):::changed --> H1["hop 1"] --> H2["hop 2"] --> H3["hop 3"] --> H4["hop 4"] --> H5["hop 5"]
+    subgraph ONE["One Orbit query — bounded at max_hops 3"]
+        H1
+        H2
+        H3
+    end
+    subgraph FULL["Faultline composes the rest — offline, in CI"]
+        H4
+        H5
+    end
+    classDef changed fill:#56B4E9,stroke:#0a3550,color:#06243a,stroke-width:2px
+```
+
+Ask a single Orbit query for a fourth hop and the live API refuses (`max_hops:4 → compile_error`). The bound is right for an interactive query; a merge gate needs the complete set, so Faultline composes the hops beyond it offline.
+
 It closes over **`EXTENDS` edges too** (inheritance / interface implementation / struct embedding), so changing a base type ripples to its *entire* subtype chain — verified live: changing `BaseRate` reaches `Tier5` **5 levels deep**, again beyond what a single bounded query returns. The same governance primitive, now for type hierarchies, not just calls.
 
 ## What it does — live
@@ -75,6 +116,22 @@ On [a real MR that raises a tax rate by one line](https://gitlab.com/anbuchelvan
 > 👉 **Fastest fix:** add **1** test — at `Rate` — to cover the whole change.
 >
 > **🔭 One Orbit query vs Faultline's full closure** — Orbit bounds a single query to 3 hops (for speed), so one reverse-`CALLS` query returns at most **5 of 7** impacted definitions; the other **2** (`netLevy` @4 hops, `InvoiceTotal` @5 hops) sit beyond what one bounded query returns. Faultline composes the full closure offline → **GATE FAILED, merge blocked.**
+
+```mermaid
+flowchart LR
+    S(["standardRate<br/>one line changed"]):::changed
+    S ==> R["Rate<br/>add 1 test here"]:::fix
+    R --> CT["CalculateTax"]:::untested
+    CT --> TWT["TotalWithTax<br/>tested"]:::tested
+    TWT --> NL["netLevy<br/>hop 4"]:::untested
+    NL --> IT["InvoiceTotal<br/>hop 5"]:::untested
+    classDef changed fill:#56B4E9,stroke:#0a3550,color:#06243a,stroke-width:2px
+    classDef untested fill:#E69F00,stroke:#7a5200,color:#2a1c00,stroke-width:2px
+    classDef tested fill:#009E73,stroke:#04503a,color:#ffffff,stroke-width:2px
+    classDef fix fill:#D55E00,stroke:#7a3500,color:#ffffff,stroke-width:3px
+```
+
+A simplified view of the live demo's blast radius. The one-line change to `standardRate` reaches **7** functions, **5** of them untested (amber), as deep as `InvoiceTotal` **5 calls** away — past what any single Orbit query returns. Every untested path runs through `Rate`, so **one** test there is the provably-minimal fix.
 
 It also renders a **mermaid** diagram of the blast subgraph (changed = blue, untested = red) inline in the note, plus a **self-contained interactive graph** (HTML, zero dependencies — no D3/CDN) delivered as a CI artifact link in the MR: zoom, pan, drag nodes, and hover any definition for its file and hop-distance. The force-directed layout is computed *deterministically in Go*, so the same change yields a byte-identical page — it opens in any browser offline, or renders inline if GitLab Pages is enabled.
 
@@ -109,6 +166,29 @@ This is proven, not asserted:
 - **No overclaim:** Faultline does *not* invent cross-language call edges (a Go→Ruby HTTP call is not a `CALLS` edge, and we don't pretend it is). The runnable three-language example and reproduction steps: **[demo/polyglot/](demo/polyglot/)**.
 
 ## Architecture
+
+```mermaid
+flowchart TB
+    ORBIT[("GitLab Orbit<br/>CALLS / EXTENDS · line ranges")]:::data
+    subgraph CORE["Deterministic core — no model in the decision path"]
+        direction LR
+        AGENT["Go agent<br/>fetch · normalize · coverage · render"]
+        ENGINE["Rust engine<br/>closure · min vertex cut · Shapley"]
+        AGENT <--> ENGINE
+    end
+    ORBIT --> AGENT
+    AGENT --> OUT["MR verdict · interactive graph · Code Quality report"]
+    AGENT --> GATE{"untested<br/>impact?"}
+    GATE -->|"no"| PASS["Pass"]:::tested
+    GATE -->|"yes"| BLOCK["Block the pipeline"]:::gate
+    BLOCK --> DUO["GitLab Duo drafts the fix test-MR<br/>— a human approves"]:::changed
+    classDef tested fill:#009E73,stroke:#04503a,color:#ffffff,stroke-width:2px
+    classDef gate fill:#D55E00,stroke:#7a3500,color:#ffffff,stroke-width:2px
+    classDef changed fill:#56B4E9,stroke:#0a3550,color:#06243a,stroke-width:2px
+    classDef data fill:#e6edf3,stroke:#30363d,color:#0d1117,stroke-width:2px
+```
+
+The decision is a pure function of Orbit's graph — the Rust engine and Go agent settle the verdict with **no model in the path**. GitLab Duo only enters *after* the block, to draft the prescribed test for a human to approve.
 
 | Component | Role | Tests |
 |---|---|---|

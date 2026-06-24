@@ -5,7 +5,7 @@
 ### Transitive change-impact governance for GitLab merge requests — built on [GitLab Orbit](https://about.gitlab.com/gitlab-orbit/).
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-success.svg)
-![tests](https://img.shields.io/badge/tests-56%20passing-brightgreen)
+![tests](https://img.shields.io/badge/tests-110%20passing-brightgreen)
 ![engine](https://img.shields.io/badge/engine-Rust-orange)
 ![agent](https://img.shields.io/badge/agent-Go-00ADD8)
 ![built on](https://img.shields.io/badge/built%20on-GitLab%20Orbit-FC6D26)
@@ -85,8 +85,8 @@ The **Rust engine** is the moat: a pure, deterministic BFS over reverse impact e
 
 On [a real MR that raises a tax rate by one line](https://gitlab.com/anbuchelvanganesan.cse2024-group/faultline-demo/-/merge_requests/1), the pipeline goes **red** and Faultline posts:
 
-> ⚠️ **6 definitions transitively affected** — max depth **5**, beyond Orbit's 3-hop query cap.
-> **🔭 Orbit reaches at most 4 of 6**; `netLevy` (4 hops) and `InvoiceTotal` (5 hops) are invisible to any single Orbit query.
+> ⚠️ **7 definitions transitively affected** — max depth **5**, beyond Orbit's 3-hop query cap.
+> **🔭 Orbit reaches at most 5 of 7**; `netLevy` (4 hops) and `InvoiceTotal` (5 hops) are invisible to any single Orbit query.
 > 🚦 **Untested blast radius — 5 impacted symbols with no test coverage → GATE FAILED, merge blocked.**
 
 ## It covers inheritance, not just calls
@@ -110,7 +110,7 @@ graph BT
 A gate that blocks merges must be **complete** and **deterministic**. Faultline is both, and it's proven:
 
 - **A property test** (`analyze_matches_naive_reachability_on_random_graphs`) cross-checks the engine against an *independent* naive reachability oracle over **400 random graphs** — a machine-checked proof that the closure is the complete set, not a heuristic subset.
-- **56 deterministic tests total** (Rust engine: 28 example + 3 property · Go agent: 25). See [`faultline/CORRECTNESS.md`](faultline/CORRECTNESS.md) for the invariant, determinism guarantees, complexity, and honest limitations.
+- **110 deterministic tests total** (Rust engine 34 · Go agent 76). See [`faultline/CORRECTNESS.md`](faultline/CORRECTNESS.md) for the invariant, determinism guarantees, complexity, and honest limitations.
 
 ## Install (one CI job)
 
@@ -121,8 +121,8 @@ include:
 ```
 
 ```console
-$ (cd faultline/engine && cargo test)   # 31 passed
-$ (cd faultline/agent  && go test ./...) # 25 passed
+$ (cd faultline/engine && cargo test)   # 34 passed
+$ (cd faultline/agent  && go test ./...) # 76 passed
 ```
 
 ## This repository
@@ -132,8 +132,8 @@ $ (cd faultline/agent  && go test ./...) # 25 passed
 | [`faultline/`](faultline/) | the tool — Rust engine, Go agent, AI Catalog agent, CI include, docs |
 | `ripple-demo-go/` | demo target with the deep call + inheritance chains |
 
-**Also published:** the `faultline-impact-reviewer` declarative agent is live in the **GitLab AI Catalog** (v1.0.0) as the always-on, in-platform companion to the CI engine.
+**Also published:** the `faultline-impact-reviewer` declarative agent is live in the **GitLab AI Catalog** (v1.1.0) as the always-on, in-platform companion to the CI engine.
 
 ## License
 
-[MIT](faultline/LICENSE).
+[MIT](LICENSE).

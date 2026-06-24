@@ -31,10 +31,10 @@ func TestBuildInteractiveHTMLStructure(t *testing.T) {
 	html := buildInteractiveHTML(g, []string{"C"}, rep, untested)
 
 	for _, want := range []string{
-		"<!DOCTYPE html>", `id="faultline-data"`, `viewBox="0 0 960 640"`,
+		"<!DOCTYPE html>", `id="fl-data"`, `viewBox="0 0 960 640"`,
 		"standardRate", "Rate", "levyBase",
-		`"role":"changed"`, `"role":"untested"`, `"role":"impacted"`,
-		`"nodes":`, `"edges":`,
+		`"type":"changed"`, `"type":"untested"`, `"type":"tested"`,
+		`"nodes":`, `"edges":`, `"meta":`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("interactive HTML missing %q", want)

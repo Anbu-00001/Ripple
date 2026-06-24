@@ -14,7 +14,7 @@
 #    Set FAULTLINE_GATE=0 to make it strict (zero untested impact tolerated).
 
 include:
-  - component: $CI_SERVER_HOST/components/ai-catalog/catalog-sync@0.0.20
+  - component: $CI_SERVER_HOST/components/ai-catalog/catalog-sync@0.0.24
     inputs:
       group_id: 134742282  # top-level group `anbuchelvanganesan.cse2024-group` numeric id
   - remote: 'https://gitlab.com/anbuchelvanganesan.cse2024-group/faultline/-/raw/main/ci/faultline-gate.yml'
